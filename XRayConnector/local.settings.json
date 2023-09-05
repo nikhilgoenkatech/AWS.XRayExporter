@@ -1,0 +1,11 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet",
+    "OTLP_HEADER_AUTHORIZATION": "<YOUR-OPTIONAL-OTLP-HEADER-AUTHORIZATION>",
+    "OTLP_ENDPOINT": "<YOUR-OTLP-TARGET-ENDPOINT>",
+    "AWS_IdentityKey": "<YOUR-AWS-IDENTITY-KEY>",
+    "AWS_SecretKey": "<YOUR-AWS-SECRET-KEY>"
+  }
+}
