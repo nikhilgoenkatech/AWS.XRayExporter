@@ -1,16 +1,16 @@
-﻿using System;
-using Google.Protobuf;
-using Opentelemetry.Proto.Trace.V1;
-using Opentelemetry.Proto.Common.V1;
-using Opentelemetry.Proto.Resource.V1;
-using System.Text.Json;
-using Opentelemetry.Proto.Collector.Trace.V1;
-using OpenTelemetry;
+﻿using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Opentelemetry.Proto.Collector.Trace.V1;
+using Opentelemetry.Proto.Common.V1;
+using Opentelemetry.Proto.Resource.V1;
+using Opentelemetry.Proto.Trace.V1;
+using OpenTelemetry;
+using System;
+using System.Text.Json;
+using XRay;
 using OTelSemConv = OpenTelemetry.SemanticConventions;
 using ResSemConv = OpenTelemetry.ResourceSemanticConventions;
-using XRay;
 
 namespace XRay2OTLP
 {
@@ -240,7 +240,7 @@ namespace XRay2OTLP
         }
 
 
-        public void addAWSToRessource(ResourceSpans resSpan, JsonElement segment)
+        public void AddAWSToRessource(ResourceSpans resSpan, JsonElement segment)
         {
             JsonElement aws;
             if (segment.TryGetProperty(Properties.Aws, out aws))
@@ -285,7 +285,7 @@ namespace XRay2OTLP
 
         }
 
-        public void addAWSToInstrumentationLibrary(InstrumentationLibrarySpans libSpan, JsonElement segment)
+        public void AddAWSToInstrumentationLibrary(InstrumentationLibrarySpans libSpan, JsonElement segment)
         {
             JsonElement aws;
             if (segment.TryGetProperty(Properties.Aws, out aws))
@@ -307,7 +307,7 @@ namespace XRay2OTLP
 
         }
 
-        public void addAWSToSpan(Span span, JsonElement segment)
+        public void AddAWSToSpan(Span span, JsonElement segment)
         {
             JsonElement aws;
             if (segment.TryGetProperty(Properties.Aws, out aws))
@@ -331,7 +331,7 @@ namespace XRay2OTLP
                 return Status.Types.StatusCode.Error;
         }
 
-        public void addHttp(Span span, JsonElement segment)
+        public void AddHttp(Span span, JsonElement segment)
         {
             JsonElement http;
             if (segment.TryGetProperty(Properties.Http, out http))
@@ -364,7 +364,7 @@ namespace XRay2OTLP
 
         }
 
-        public void addSql(Span span, JsonElement segment)
+        public void AddSql(Span span, JsonElement segment)
         {
             JsonElement elem;
             if (segment.TryGetProperty(Properties.Sql, out elem))
@@ -388,53 +388,75 @@ namespace XRay2OTLP
 
         }
 
-        public void AddSpansFromSegment(string traceId, string parentSpanId, JsonElement segment, ExportTraceServiceRequest export)
+        public void AddXRayTraceContext(Span s, string XRayTraceId, string XRaySegementId)
+        {
+            s.Attributes.Add(new KeyValue()
+            {
+                Key = AWSSemanticConventions.AWSXRayTraceIdAttribute,
+                Value = new AnyValue()
+                {
+                    StringValue = XRayTraceId
+                }
+            });
+
+            s.Attributes.Add(new KeyValue()
+            {
+                Key = AWSSemanticConventions.AWSXRaySegmentIdAttribute,
+                Value = new AnyValue()
+                {
+                    StringValue = XRaySegementId
+                }
+            }); 
+        }
+        public void AddSpansFromSegment(string xrayTraceId, string xrayParentSpanId, JsonElement segment, ExportTraceServiceRequest export)
         {
             var resSpan = new ResourceSpans();
             export.ResourceSpans.Add(resSpan);
 
-            if (String.IsNullOrEmpty(traceId)) 
-                traceId = ParseTraceId(Value(segment, Attributes.TraceId));
+            if (String.IsNullOrEmpty(xrayTraceId)) 
+                xrayTraceId = Value(segment, Attributes.TraceId);
 
-            var spanId = ParseSpanId(Value(segment, Attributes.SegmentId));
-            var parentId = ParseSpanId(Value(segment, Attributes.ParentId));
-            if (String.IsNullOrEmpty(parentId) && !String.IsNullOrEmpty(parentSpanId)) 
-                    parentId = parentSpanId;
+            if (String.IsNullOrEmpty(xrayParentSpanId))
+                xrayParentSpanId = Value(segment, Attributes.ParentId);
+
+            var xraySpanId = Value(segment, Attributes.SegmentId);
 
             resSpan.Resource = new Resource();
 
             TryAddResourceAttribute(resSpan, ResSemConv.AttributeServiceName, Value(segment, Attributes.Name));
-            addAWSToRessource(resSpan, segment);
+            AddAWSToRessource(resSpan, segment);
 
             var libSpan = new InstrumentationLibrarySpans();
-            addAWSToInstrumentationLibrary(libSpan, segment);
+            AddAWSToInstrumentationLibrary(libSpan, segment);
 
             resSpan.InstrumentationLibrarySpans.Add(libSpan);
 
             var span = new Span();
             libSpan.Spans.Add(span);
 
-            span.TraceId = ConvertToByteString(traceId);
-            span.SpanId = ConvertToByteString(spanId);
-            if (!String.IsNullOrEmpty(parentId))
-                span.ParentSpanId = ConvertToByteString(parentId);
+            span.TraceId = ConvertToByteString(ParseTraceId(xrayTraceId));
+            span.SpanId = ConvertToByteString(ParseSpanId(xraySpanId));
+            if (!String.IsNullOrEmpty(xrayParentSpanId))
+                span.ParentSpanId = ConvertToByteString(ParseSpanId(xrayParentSpanId));
             else
                 span.Kind = Span.Types.SpanKind.Server;
+
+            AddXRayTraceContext(span, xrayTraceId, xraySpanId);
 
             span.Name = Value(segment, Attributes.Name);
 
             span.StartTimeUnixNano = ParseTimestampToNano(segment,Attributes.Start);
             span.EndTimeUnixNano = ParseTimestampToNano(segment, Attributes.End);
 
-            addAWSToSpan(span, segment);
-            addHttp(span, segment);
-            addSql(span, segment);
+            AddAWSToSpan(span, segment);
+            AddHttp(span, segment);
+            AddSql(span, segment);
 
             JsonElement elem;
             if (span.Kind == Span.Types.SpanKind.Unspecified && !segment.TryGetProperty(Attributes.Namespace, out elem))
                 span.Kind = Span.Types.SpanKind.Internal;
 
-            if (!String.IsNullOrEmpty(parentSpanId))
+            if (!String.IsNullOrEmpty(xrayParentSpanId))
                 span.Kind = Span.Types.SpanKind.Client;
 
             JsonElement subSegments;
@@ -443,7 +465,7 @@ namespace XRay2OTLP
                 var subs= subSegments.EnumerateArray();
                 while (subs.MoveNext())
                 {
-                    AddSpansFromSegment(traceId, spanId, subs.Current, export);
+                    AddSpansFromSegment(xrayTraceId, xraySpanId, subs.Current, export);
                 }
             }
         }

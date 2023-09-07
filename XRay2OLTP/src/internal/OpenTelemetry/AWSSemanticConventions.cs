@@ -58,5 +58,9 @@ namespace OpenTelemetry
         public const string AWSXrayExceptionSkippedAttribute = "aws.xray.exception.skipped";
         // AWSXrayExceptionCauseAttribute is the `cause` field in an exception
         public const string AWSXrayExceptionCauseAttribute = "aws.xray.exception.cause";
+
+        //XRay Segment Reference
+        public const string AWSXRayTraceIdAttribute = "aws.xray.trace_id";
+        public const string AWSXRaySegmentIdAttribute = "aws.xray.segment_id";
     }
 }

@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Amazon.Runtime;
 using Amazon.XRay;
 using Amazon.XRay.Model;
 using Microsoft.Azure.WebJobs;
@@ -19,8 +20,10 @@ namespace XRayConnector
     public class XRayConnector
     {
 
-        public XRayConnector()
+        private readonly IHttpClientFactory _httpClientFactory;
+        public XRayConnector(IHttpClientFactory httpClientFactory)
         {
+            _httpClientFactory = httpClientFactory;
         }
 
         public async Task<TracesResult> GetTraces(GetTraceSummariesRequest req, ILogger log)
@@ -51,9 +54,6 @@ namespace XRayConnector
         [FunctionName(nameof(GetRecentTraceIds))]
         public async Task<TracesResult> GetRecentTraceIds([ActivityTrigger] TracesRequest req, ILogger log)
         {
-
-            log.LogInformation("GetRecentTraceIds");
-
             var reqObj = new GetTraceSummariesRequest
             {
                 StartTime = req.StartTime,
@@ -99,8 +99,6 @@ namespace XRayConnector
         [FunctionName(nameof(GetTraceDetails))]
         public Task<TraceDetailsResult> GetTraceDetails([ActivityTrigger] TraceDetailsRequest req, ILogger log)
         {
-            log.LogInformation("GetTraceDetails");
-
             var reqObj = new BatchGetTracesRequest()
             {
                 TraceIds = new List<string>(req.TraceIds), 
@@ -114,8 +112,6 @@ namespace XRayConnector
         [FunctionName(nameof(ProcessTraces))]
         public async Task<bool> ProcessTraces([ActivityTrigger] string tracesJson, ILogger log)
         {
-            log.LogInformation("ProcessTraces");
-
             try
             {
                 var jsonDoc = JsonDocument.Parse(tracesJson);
@@ -123,12 +119,11 @@ namespace XRayConnector
                 var conv = new XRay2OTLP.Convert(null, false);
                 var exportTraceServiceRequest = conv.FromXRaySegmentDocArray(jsonDoc);
 
-                var client = new HttpClient();
-                client.DefaultRequestHeaders.Clear();
+                var httpClient = _httpClientFactory.CreateClient("XRayConnector");
 
                 var authHeader = Environment.GetEnvironmentVariable("OTLP_HEADER_AUTHORIZATION");
                 if (!String.IsNullOrEmpty(authHeader))
-                    client.DefaultRequestHeaders.Add("Authorization", authHeader);
+                    httpClient.DefaultRequestHeaders.Add("Authorization", authHeader);
 
                 var otlpEndpoint = Environment.GetEnvironmentVariable("OTLP_ENDPOINT");
                 if (!otlpEndpoint.Contains("v1/traces"))
@@ -139,7 +134,7 @@ namespace XRayConnector
 
                 var content = new XRay2OTLP.ExportRequestContent(exportTraceServiceRequest);
 
-                var res = await client.PostAsync(otlpEndpoint, content);
+                var res = await httpClient.PostAsync(otlpEndpoint, content);
                 if (!res.IsSuccessStatusCode)
                 {
                     throw new Exception("Couldn't send span " + (res.StatusCode));
@@ -161,7 +156,6 @@ namespace XRayConnector
             var traces = context.GetInput<TracesResult>();
             if (traces != null)
             {
-                log.LogWarning("RetrieveTraceDetails");
                 foreach (var traceBatch in traces.TraceIds)
                 {
                     var getTraceDetails = new TraceDetailsRequest()
@@ -181,8 +175,7 @@ namespace XRayConnector
                     }
                 }
             }
-            else
-                log.LogWarning("RetrieveTraceDetails//Empty");
+            
         }
 
         [FunctionName(nameof(RetrieveRecentTraces))]
