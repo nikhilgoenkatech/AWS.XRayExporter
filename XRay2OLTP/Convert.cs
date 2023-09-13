@@ -357,8 +357,8 @@ namespace XRay2OTLP
                 if (aws.TryGetProperty(AwsAttributes.ApiGateway, out sub))
                 {
                     TryAddAttribute(span, AWSSemanticConventions.AWSRequestIDAttribute, Value(sub, AwsAttributes.RequestID));
-                    TryAddAttribute(span, AWSSemanticConventions.AWSRequestIDAttribute, Value(sub, AwsAttributes.ApiID));
-                    TryAddAttribute(span, AWSSemanticConventions.AWSRequestIDAttribute, Value(sub, AwsAttributes.ApiStage));
+                    TryAddAttribute(span, AWSSemanticConventions.AWSApiIDAttribute, Value(sub, AwsAttributes.ApiID));
+                    TryAddAttribute(span, AWSSemanticConventions.AWSApiStageAttribute, Value(sub, AwsAttributes.ApiStage));
                 }
 
             }
@@ -455,7 +455,7 @@ namespace XRay2OTLP
                 }
             }); 
         }
-        public void AddSpansFromSegment(string xrayTraceId, string xrayParentSpanId, JsonElement segment, ExportTraceServiceRequest export)
+        public void AddSpansFromSegment(string xrayTraceId, string xrayParentSpanId, string origin, JsonElement segment, ExportTraceServiceRequest export)
         {
             var resSpan = new ResourceSpans();
             export.ResourceSpans.Add(resSpan);
@@ -497,6 +497,10 @@ namespace XRay2OTLP
             span.StartTimeUnixNano = ParseTimestampToNano(segment,Attributes.Start);
             span.EndTimeUnixNano = ParseTimestampToNano(segment, Attributes.End);
 
+            if (String.IsNullOrEmpty(origin))
+                origin = Value(segment, Properties.Origin);
+            TryAddAttribute(span, AWSSemanticConventions.AWSXRaySegmentOriginAttribute, origin);
+
             AddAWSToSpan(span, segment);
             AddHttp(span, segment);
             AddSql(span, segment);
@@ -514,7 +518,7 @@ namespace XRay2OTLP
                 var subs= subSegments.EnumerateArray();
                 while (subs.MoveNext())
                 {
-                    AddSpansFromSegment(xrayTraceId, xraySpanId, subs.Current, export);
+                    AddSpansFromSegment(xrayTraceId, xraySpanId, origin, subs.Current, export);
                 }
             }
         }
@@ -533,7 +537,7 @@ namespace XRay2OTLP
             var s = root.RootElement.EnumerateArray();
             while (s.MoveNext())
             {
-                AddSpansFromSegment(String.Empty, String.Empty, s.Current, export);
+                AddSpansFromSegment(String.Empty, String.Empty, String.Empty, s.Current, export);
             }
 
             return export;
@@ -560,7 +564,7 @@ namespace XRay2OTLP
                     {
                         var segmentDoc = JsonDocument.Parse(segmentJsonStr);
 
-                        AddSpansFromSegment(traceId, String.Empty, segmentDoc.RootElement, export);
+                        AddSpansFromSegment(traceId, String.Empty, String.Empty, segmentDoc.RootElement, export);
                     }
                 }
 

@@ -62,5 +62,10 @@ namespace OpenTelemetry
         //XRay Segment Reference
         public const string AWSXRayTraceIdAttribute = "aws.xray.trace_id";
         public const string AWSXRaySegmentIdAttribute = "aws.xray.segment_id";
+        public const string AWSXRaySegmentOriginAttribute = "aws.xray.origin";
+
+        //ApiGateway
+        public const string AWSApiIDAttribute = "aws.apigateway.id";
+        public const string AWSApiStageAttribute = "aws.apigateway.stage";
     }
 }
