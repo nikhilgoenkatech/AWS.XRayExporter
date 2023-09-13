@@ -60,6 +60,7 @@ namespace XRayConnector
                 EndTime = req.EndTime,
                 NextToken = req.NextToken
             };
+            log.LogInformation("GetTraceSummaries@" + req.StartTime + " - " + req.EndTime);
 
             return await GetTraces(reqObj, log);
         }
@@ -114,6 +115,8 @@ namespace XRayConnector
         {
             try
             {
+                log.LogDebug(tracesJson);
+
                 var jsonDoc = JsonDocument.Parse(tracesJson);
 
                 var conv = new XRay2OTLP.Convert(null, false);

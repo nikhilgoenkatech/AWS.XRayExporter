@@ -13,11 +13,13 @@ namespace XRay
         public const string EC2 = "ec2";
         public const string EKS = "eks";
         public const string XRay = "xray";
+        public const string ApiGateway = "api_gateway";
 
         public const string AccountID = "account_id";
         public const string Operation = "operation";
         public const string RemoteRegion = "region";
         public const string RequestID = "request_id";
+
         public const string QueueURL = "queue_url";
         public const string TableName = "table_name";
         public const string TableNames = "table_names";
@@ -52,11 +54,10 @@ namespace XRay
         public const string XRayVersion = "sdk_version";
         public const string XRayAutoInstr = "auto_instrumentation";
 
+        public const string ApiID = "rest_api_id";
+        public const string ApiStage = "stage";
 
-
-
-
-
+        public const string LambdaName = "function_name";
 
     }
 }

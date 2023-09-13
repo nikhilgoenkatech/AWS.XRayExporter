@@ -13,7 +13,11 @@ namespace XRay
         public const string Metadata = "metadata";
         public const string Annotations= "annotations";
         public const string Precursor = "precursor_ids";
+        public const string Origin = "origin";
+        public const string Arn = "resource_arn";
 
         public const string Subsegments = "subsegments";
     }
+
+    
 }
