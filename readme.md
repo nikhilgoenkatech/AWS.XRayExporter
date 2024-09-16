@@ -59,8 +59,9 @@ The service includes an endpoint ```/TestGenerateSampleTrace```, which sends a s
 ![Dynatrace](images/dynatrace-1.png)
 ![Span setails](images/dynatrace-2.png)
 ## Release Notes
-* v0.5 Initial release 
+* v0.8 Add mapping for SQS, SNS, DynamoDB and Links
 * v0.6 Add mappings for ApiGateway and Lambda
+* v0.5 Initial release 
 
 ## Contribute
 This is an open source project, and we gladly accept new contributions and contributors.  
