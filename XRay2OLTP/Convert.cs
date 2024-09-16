@@ -7,9 +7,13 @@ using Opentelemetry.Proto.Resource.V1;
 using Opentelemetry.Proto.Trace.V1;
 using OpenTelemetry;
 using System;
+using System.Diagnostics;
+using System.IO;
+using System.Security.Cryptography;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml.Serialization;
 using XRay;
 using OTelSemConv = OpenTelemetry.SemanticConventions;
 using ResSemConv = OpenTelemetry.ResourceSemanticConventions;
@@ -19,25 +23,32 @@ namespace XRay2OTLP
     //
     //XRay SegmentMapping: https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/receiver/awsxrayreceiver/internal/translator/translator.go
     //
+    //Sample Segments:
+    //https://docs.aws.amazon.com/xray/latest/devguide/xray-api-segmentdocuments.html
     public class Convert
     {
         private readonly ILogger _logger;
 
-        public readonly bool _SimulateRealtime = false;
-
+#if DEBUG
+        internal bool _SimulateRealtime = false;
+        internal bool _SimulateTraceId = true;
+        internal int _SpanSequenceStep = 0;
+#endif
         public Convert(ILoggerFactory? loggerFactory)
         {
             _logger = loggerFactory?.CreateLogger<Convert>()
               ?? NullLoggerFactory.Instance.CreateLogger<Convert>();
         }
-#if DEBUG
-        public Convert(ILoggerFactory? loggerFactory, bool simulateRealtime) : this(loggerFactory)
-        {
-            _SimulateRealtime = simulateRealtime;
-        }
 
-        internal int step = 0;
+        public Convert(ILoggerFactory? loggerFactory, bool simulateRealtime, bool simulateTraceId) : this(loggerFactory)
+        {
+#if DEBUG
+            _SimulateRealtime = simulateRealtime;
+            _SimulateTraceId = simulateTraceId;
+#else
+    #warning "Do not use this constructor in RELEASE. Debugging features will be disabled!"
 #endif
+        }
 
         public ulong ParseTimestampToNano(JsonElement e, string key)
         {
@@ -48,11 +59,11 @@ namespace XRay2OTLP
                 if (key == Attributes.Start)
                 {
 
-                    ts = DateTime.UtcNow.AddMilliseconds(step * 50);
-                    step++;
+                    ts = DateTime.UtcNow.AddMilliseconds(_SpanSequenceStep * 50);
+                    _SpanSequenceStep++;
                 }
                 else
-                    ts = DateTime.UtcNow.AddMilliseconds((step * 50) + 200);
+                    ts = DateTime.UtcNow.AddMilliseconds((_SpanSequenceStep * 50) + 200);
 
                 DateTime epochStart = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
                 return (ulong)((ts - epochStart).Ticks * 100);
@@ -67,8 +78,12 @@ namespace XRay2OTLP
         internal string ParseTraceId(string traceid)
         {
 #if DEBUG
-            if (_SimulateRealtime) //generate a unique trace-id per run
-                return BitConverter.ToString(Guid.NewGuid().ToByteArray()).Replace("-", string.Empty).ToLower();
+            if (_SimulateTraceId) //generate a unique trace-id per run
+            {
+                traceid = BitConverter.ToString(Guid.NewGuid().ToByteArray()).Replace("-", string.Empty).ToLower();
+                Debug.WriteLine("[XRay2OTLP] Generated Trace-Id: " + traceid);
+                return traceid;
+            }
             else
 #endif
                 return traceid.Substring(2).Replace("-", String.Empty); //removing versions string and separators
@@ -208,7 +223,7 @@ namespace XRay2OTLP
 
         }
 
-        internal string Value(JsonElement e, string key)
+        internal string Value(JsonElement e, string key, string defaultValue = "")
         {
             JsonElement val;
             if (e.TryGetProperty(key, out val))
@@ -222,7 +237,7 @@ namespace XRay2OTLP
                 _logger.LogDebug("Missing property '" + key + "'");
             }
 
-            return "";
+            return defaultValue;
 
         }
         internal int? NumberValue(JsonElement e, string key)
@@ -241,83 +256,6 @@ namespace XRay2OTLP
 
         }
 
-
-        public void AddAWSToRessource(ResourceSpans resSpan, JsonElement segment)
-        {
-            TryAddResourceAttribute(resSpan, ResSemConv.AttributeCloudProvider, CloudProviderConstants.AWS);
-
-            TryAddResourceAttribute(resSpan, CloudProviderSemanticConventions.AttributeResourceID, Value(segment, Properties.Arn));
-            
-
-            JsonElement aws;
-            if (segment.TryGetProperty(Properties.Aws, out aws))
-            {
-                TryAddResourceAttribute(resSpan, ResSemConv.AttributeCloudAccount, Value(aws, AwsAttributes.AccountID));
-                TryAddResourceAttribute(resSpan, ResSemConv.AttributeCloudRegion, Value(aws, AwsAttributes.RemoteRegion));
-
-                if(TryAddResourceAttribute(resSpan, ResSemConv.AttributeFaasName, Value(aws, AwsAttributes.LambdaName)))
-                {
-                    //extract arn from request url
-                    JsonElement http;
-                    if (segment.TryGetProperty(Properties.Http, out http))
-                    {
-                        JsonElement req;
-                        if (http.TryGetProperty(HttpAttributes.Request, out req))
-                        {
-                            JsonElement url;
-                            if (req.TryGetProperty(HttpAttributes.Url, out url))
-                            {
-                                Regex regex = new Regex(@".*(arn:.*)");
-                                var match = regex.Match(url.GetString());
-                                if (match.Success)
-                                    TryAddResourceAttribute(resSpan, CloudProviderSemanticConventions.AttributeResourceID, match.Groups[1].Value);
-                            }
-                        }
-                    }
-                    
-                }
-
-                JsonElement elem;
-                if (aws.TryGetProperty(AwsAttributes.EC2, out elem))
-                {
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeCloudZone, Value(elem, AwsAttributes.EC2AvailabilityZone));
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeHostId, Value(elem, AwsAttributes.EC2InstanceId));
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeHostType, Value(elem, AwsAttributes.EC2InstanceSize));
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeHostImageId, Value(elem, AwsAttributes.EC2AmiId));
-                }
-
-                if (aws.TryGetProperty(AwsAttributes.ECS, out elem))
-                {
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeContainerName, Value(elem, AwsAttributes.ECSContainername));
-                    TryAddResourceAttribute(resSpan, ContainerSemanticConventions.AttributeContainerId, Value(elem, AwsAttributes.ECSContainerId));
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeCloudZone, Value(elem, AwsAttributes.ECSAvailabilityZone));
-
-                }
-
-                if (aws.TryGetProperty(AwsAttributes.EKS, out elem))
-                {
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeK8sCluster, Value(elem, AwsAttributes.EKSClusterName));
-                    TryAddResourceAttribute(resSpan, ContainerSemanticConventions.AttributeContainerId, Value(elem, AwsAttributes.EKSContainerId));
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeK8sPod, Value(elem, AwsAttributes.EKSPod));
-
-                }
-
-                if (aws.TryGetProperty(AwsAttributes.Beanstalk, out elem))
-                {
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeServiceNamespace, Value(elem, AwsAttributes.BeanstalkEnvironment));
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeServiceInstance, NumberValue(elem, AwsAttributes.BeanstalkDeploymentId));
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeServiceVersion, Value(elem, AwsAttributes.BeanstalkVersionLabel));
-
-                }
-
-                if (aws.TryGetProperty(AwsAttributes.ApiGateway, out elem))
-                {
-                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeCloudAccount, Value(elem, AwsAttributes.AccountID));
-                }
-
-            }
-
-        }
 
         public void AddAWSToInstrumentationLibrary(InstrumentationLibrarySpans libSpan, JsonElement segment)
         {
@@ -341,17 +279,146 @@ namespace XRay2OTLP
 
         }
 
-        public void AddAWSToSpan(Span span, JsonElement segment)
+        private Regex queueUrlPattern = new Regex(@"https://sqs\.(?<region>[^.]+)\.amazonaws\.com/(?<accountId>\d+)/(?<resource>.+)", RegexOptions.Compiled);
+        private Regex arnPattern= new Regex(@"arn:aws:[^:]+:(?<region>[^:]*):(?<accountId>[^:]*):(?<resource>.+)", RegexOptions.Compiled);
+
+        private bool MatchAccountRegionResource(Match match, out string accountId, out string region, out string resource)
         {
+            if (match.Success)
+            {
+                accountId = match.Groups["accountId"].Value;
+                region = match.Groups["region"].Value;
+                resource = match.Groups["resource"].Value;
+
+                return true;
+            }
+            else
+            {
+                accountId = region = resource = String.Empty;
+                return false;
+            }
+        }
+        private bool ParseArn(string arn, out string accountId, out string region, out string resource)
+        {
+            Match match = arnPattern.Match(arn);
+            return MatchAccountRegionResource(match, out accountId, out region, out resource);
+        }
+
+        private bool ParseQueueUrl(string queueurl, out string accountId, out string region, out string resource)
+        {
+            Match match = queueUrlPattern.Match(queueurl);
+            return MatchAccountRegionResource(match, out accountId, out region, out resource);
+
+        }
+
+        public string AddAWS(ResourceSpans resSpan, Span span, JsonElement segment, out string relatedServiceName)
+        {
+            string spanName = String.Empty;
+
+            string serviceName = Value(segment, Attributes.Name);
+            bool isInternal = true;
+
+            TryAddResourceAttribute(resSpan, ResSemConv.AttributeCloudProvider, CloudProviderConstants.AWS);
+            TryAddResourceAttribute(resSpan, CloudProviderSemanticConventions.AttributeResourceID, Value(segment, Properties.Arn));
+
             JsonElement aws;
             if (segment.TryGetProperty(Properties.Aws, out aws))
             {
-                TryAddAttribute(span, AWSSemanticConventions.AWSOperationAttribute, Value(aws, AwsAttributes.Operation));
-                TryAddAttribute(span, AWSSemanticConventions.AWSRequestIDAttribute, Value(aws, AwsAttributes.RequestID));
-                TryAddAttribute(span, AWSSemanticConventions.AWSQueueURLAttribute, Value(aws, AwsAttributes.QueueURL));
-                TryAddAttribute(span, AWSSemanticConventions.AWSTableNameAttribute, Value(aws, AwsAttributes.TableName));
-                TryAddAttribute(span, AWSSemanticConventions.AWSXrayRetriesAttribute, NumberValue(aws, AwsAttributes.Retries));
+                TryAddResourceAttribute(resSpan, ResSemConv.AttributeCloudAccount, Value(aws, AwsAttributes.AccountID));
+            
+                JsonElement elem;
+                if (aws.TryGetProperty(AwsAttributes.EC2, out elem))
+                {
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeCloudZone, Value(elem, AwsAttributes.EC2AvailabilityZone));
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeHostId, Value(elem, AwsAttributes.EC2InstanceId));
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeHostType, Value(elem, AwsAttributes.EC2InstanceSize));
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeHostImageId, Value(elem, AwsAttributes.EC2AmiId));
+                }
 
+                if (aws.TryGetProperty(AwsAttributes.ECS, out elem))
+                {
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeContainerName, Value(elem, AwsAttributes.ECSContainername));
+                    TryAddResourceAttribute(resSpan, ContainerSemanticConventions.AttributeContainerId, Value(elem, AwsAttributes.ECSContainerId));
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeCloudZone, Value(elem, AwsAttributes.ECSAvailabilityZone));
+                }
+
+                if (aws.TryGetProperty(AwsAttributes.EKS, out elem))
+                {
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeK8sCluster, Value(elem, AwsAttributes.EKSClusterName));
+                    TryAddResourceAttribute(resSpan, ContainerSemanticConventions.AttributeContainerId, Value(elem, AwsAttributes.EKSContainerId));
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeK8sPod, Value(elem, AwsAttributes.EKSPod));
+                }
+
+                if (aws.TryGetProperty(AwsAttributes.Beanstalk, out elem))
+                {
+                    //TryAddResourceAttribute(resSpan, ResSemConv.AttributeServiceNamespace, Value(elem, AwsAttributes.BeanstalkEnvironment));
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeServiceInstance, NumberValue(elem, AwsAttributes.BeanstalkDeploymentId));
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeServiceVersion, Value(elem, AwsAttributes.BeanstalkVersionLabel));
+                }
+
+                if (aws.TryGetProperty(AwsAttributes.ApiGateway, out elem))
+                {
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeCloudAccount, Value(elem, AwsAttributes.AccountID));
+                }
+
+                //span attributes
+             
+                var prop = Value(aws, AwsAttributes.Operation);
+                if (TryAddAttribute(span, OTelSemConv.AttributeRpcMethod, prop)) //former: TryAddAttribute(span, AWSSemanticConventions.AWSOperationAttribute, Value(aws, AwsAttributes.Operation));
+                {
+                    isInternal = false;
+                    spanName = prop;
+                    TryAddAttribute(span, OTelSemConv.AttributeRpcSystem, AWSSemanticConventions.RpcSystem);
+                    TryAddAttribute(span, OTelSemConv.AttributeRpcService, Value(segment, Attributes.Name));
+                }
+                
+                prop = Value(aws, AwsAttributes.TableName);
+                if (TryAddAttribute(span, OTelSemConv.AttributeDbCollectionname, prop)) //former: TryAddAttribute(span, AWSSemanticConventions.AWSTableNameAttribute, Value(aws, AwsAttributes.TableName))
+                {
+                    TryAddAttribute(span, OTelSemConv.AttributeDbSystem, "dynamodb");
+
+                    if (!String.IsNullOrEmpty(spanName))
+                    {
+                        serviceName = prop;
+                        spanName += " " + prop;
+                    }
+                    prop = Value(aws, AwsAttributes.RemoteRegion);
+                    if (!String.IsNullOrEmpty(prop))
+                    {
+                        serviceName += " in " + prop; 
+                    }
+                }
+
+                prop = Value(aws, AwsAttributes.LambdaName);
+                if (TryAddAttribute(span, ResSemConv.AttributeFaasName, prop))
+                {
+                    serviceName = prop;
+                    if (!String.IsNullOrEmpty(spanName))
+                        spanName += " " + prop; 
+                }
+                TryAddAttribute(span, AWSSemanticConventions.AWSFunctionArn, Value(aws, AwsAttributes.LambdaArn));
+
+                prop = Value(aws, AwsAttributes.QueueURL);
+                if (TryAddAttribute(span, AWSSemanticConventions.AWSQueueURLAttribute, prop))
+                {
+                    string arnAccountId, arnRegion, arnResource;
+                    if (ParseQueueUrl(prop, out arnAccountId, out arnRegion, out arnResource))
+                    {
+                        serviceName = arnResource + " in " + arnRegion;
+                        spanName += " " + arnResource;
+                    }
+                }
+
+                prop = Value(aws, AwsAttributes.SNSArn);
+                if (TryAddAttribute(span, AWSSemanticConventions.AWSTopicArn, prop))
+                {
+                    string arnAccountId, arnRegion, arnResource;
+                    if (ParseArn(prop, out arnAccountId, out arnRegion, out arnResource))
+                    {
+                         serviceName = arnResource+" in "+arnRegion;
+                         spanName += " " + arnResource;
+                    }
+                }
 
                 JsonElement sub;
                 if (aws.TryGetProperty(AwsAttributes.ApiGateway, out sub))
@@ -361,7 +428,20 @@ namespace XRay2OTLP
                     TryAddAttribute(span, AWSSemanticConventions.AWSApiStageAttribute, Value(sub, AwsAttributes.ApiStage));
                 }
 
+                TryAddAttribute(span, AWSSemanticConventions.AWSRequestIDAttribute, Value(aws, AwsAttributes.RequestID));
+                TryAddAttribute(span, AWSSemanticConventions.AWSXrayRetriesAttribute, NumberValue(aws, AwsAttributes.Retries));
+
+
             }
+            
+            if (isInternal)
+            {
+                span.Kind = Span.Types.SpanKind.Internal;
+            }
+            
+            relatedServiceName = serviceName; 
+
+            return spanName;
 
         }
 
@@ -375,10 +455,13 @@ namespace XRay2OTLP
                     s.Status = new Status() { Code = Status.Types.StatusCode.Error };
             }
         }
-        
 
-        public void AddHttp(Span span, JsonElement segment)
+
+      
+        public string AddHttp(Span span, JsonElement segment)
         {
+            string spanName = String.Empty;
+
             JsonElement http;
             if (segment.TryGetProperty(Properties.Http, out http))
             {
@@ -386,16 +469,27 @@ namespace XRay2OTLP
                  
                 if (http.TryGetProperty(HttpAttributes.Request, out elem))
                 {
-                    TryAddAttribute(span, OTelSemConv.AttributeHttpMethod, Value(elem, HttpAttributes.Method));
-
-                    if (TryAddAttribute(span, OTelSemConv.AttributeHttpClientIP, Value(elem, HttpAttributes.ClientIp)))
-                        span.Kind = Span.Types.SpanKind.Server; 
-
-                    TryAddAttribute(span, OTelSemConv.AttributeHttpUserAgent, Value(elem, HttpAttributes.UserAgent));
-                    TryAddAttribute(span, OTelSemConv.AttributeHttpUrl, Value(elem, HttpAttributes.Url));
-                    TryAddAttribute(span, OTelSemConv.AttributeHttpMethod, Value(elem, HttpAttributes.Method));
                     TryAddAttribute(span, OTelSemConv.AttributeHttpClientIP, Value(elem, HttpAttributes.ClientIp));
-                    //TryAddAttribute(span, OTelSemConv.AttributeHttp, Value(elem, HttpAttributes.XForwardFor));
+                 
+                    string httpMethod = Value(elem, HttpAttributes.Method, SemanticConventionsConstants.HttpMethodOther);
+                    TryAddAttribute(span, OTelSemConv.AttributeHttpRequestMethod, httpMethod);
+                    spanName = httpMethod;
+
+                    string url = Value(elem, HttpAttributes.Url);
+                    if (TryAddAttribute(span, OTelSemConv.AttributeHttpUrl, url))
+                    {
+                        Uri uri;
+                        if (Uri.TryCreate(url, UriKind.Absolute, out uri))
+                        {
+                            spanName += " "+uri.AbsolutePath;
+
+                            TryAddAttribute(span, OTelSemConv.AttributeUrlScheme, uri.Scheme);
+                            TryAddAttribute(span, OTelSemConv.AttributeServerAddress, uri.Host);
+                            TryAddAttribute(span, OTelSemConv.AttributeServerPort, uri.Port);
+                        }
+                    }
+                    TryAddAttribute(span, OTelSemConv.AttributeHttpClientIP, Value(elem, HttpAttributes.ClientIp));
+                    TryAddAttribute(span, OTelSemConv.AttributeHttpUserAgent, Value(elem, HttpAttributes.UserAgent));
                 }
 
                 if (http.TryGetProperty(HttpAttributes.Response, out elem))
@@ -409,6 +503,7 @@ namespace XRay2OTLP
 
             }
 
+            return spanName;
         }
 
         public void AddSql(Span span, JsonElement segment)
@@ -416,6 +511,8 @@ namespace XRay2OTLP
             JsonElement elem;
             if (segment.TryGetProperty(Properties.Sql, out elem))
             {
+                span.Kind = Span.Types.SpanKind.Client;
+   
                 // https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/c615d2db351929b99e46f7b427f39c12afe15b54/exporter/awsxrayexporter/translator/sql.go#L60
                 var sqlUrl = Value(elem, SqlAttributes.Url);
                 if (!String.IsNullOrEmpty(sqlUrl))
@@ -430,9 +527,58 @@ namespace XRay2OTLP
                 TryAddAttribute(span, OTelSemConv.AttributeDbSystem, Value(elem, SqlAttributes.DatabaseType));
                 TryAddAttribute(span, OTelSemConv.AttributeDbStatement, Value(elem, SqlAttributes.SanitizedQuery));
                 TryAddAttribute(span, OTelSemConv.AttributeDbUser, Value(elem, SqlAttributes.User));
-
             }
+        }
 
+        public void AddLinks(Span span, JsonElement segment)
+        {
+            JsonElement link;
+            if (segment.TryGetProperty(Properties.Links, out link))
+            {
+                var links = link.EnumerateArray();
+                while (links.MoveNext())
+                {
+                    JsonElement elem;
+
+                    if (links.Current.TryGetProperty(LinkAttributes.Attributes, out elem))
+                    {
+                        if (Value(elem, LinkAttributes.Type) == LinkAttributes.TypeParent) //only process if it's a parent link
+                        {
+                            var refXrayTraceId = Value(links.Current, Attributes.TraceId);
+                            var refXraySpanId = Value(links.Current, Attributes.SegmentId);
+
+                            if (!String.IsNullOrEmpty(refXraySpanId) && !String.IsNullOrEmpty(refXrayTraceId))
+                            {
+                                var lnk = new Span.Types.Link()
+                                {
+                                    TraceId = ConvertToByteString(ParseTraceId(refXrayTraceId)),
+                                    SpanId = ConvertToByteString(ParseSpanId(refXraySpanId))
+                                };
+
+                                lnk.Attributes.Add(new KeyValue()
+                                {
+                                    Key = AWSSemanticConventions.AWSXRayTraceIdAttribute,
+                                    Value = new AnyValue()
+                                    {
+                                        StringValue = refXrayTraceId
+                                    }
+                                });
+
+                                lnk.Attributes.Add(new KeyValue()
+                                {
+                                    Key = AWSSemanticConventions.AWSXRaySegmentIdAttribute,
+                                    Value = new AnyValue()
+                                    {
+                                        StringValue = refXraySpanId
+                                    }
+                                });
+                            }
+
+                        }
+                    }
+
+                }
+            }
         }
 
         public void AddXRayTraceContext(Span s, string XRayTraceId, string XRaySegementId)
@@ -455,10 +601,17 @@ namespace XRay2OTLP
                 }
             }); 
         }
-        public void AddSpansFromSegment(string xrayTraceId, string xrayParentSpanId, string origin, JsonElement segment, ExportTraceServiceRequest export)
+        public void AddSpansFromSegment(string xrayTraceId, string xrayParentSpanId, string origin, ResourceSpans? originResourceSpan, JsonElement segment, ExportTraceServiceRequest export)
         {
-            var resSpan = new ResourceSpans();
-            export.ResourceSpans.Add(resSpan);
+            ResourceSpans resSpan;
+            if (originResourceSpan == null)
+            {
+                resSpan = new ResourceSpans();
+                export.ResourceSpans.Add(resSpan);
+                resSpan.Resource = new Resource();
+            }
+            else
+                resSpan = originResourceSpan;
 
             if (String.IsNullOrEmpty(xrayTraceId)) 
                 xrayTraceId = Value(segment, Attributes.TraceId);
@@ -468,17 +621,10 @@ namespace XRay2OTLP
 
             var xraySpanId = Value(segment, Attributes.SegmentId);
 
-            resSpan.Resource = new Resource();
-
-
-            TryAddResourceAttribute(resSpan, ResSemConv.AttributeServiceName, Value(segment, Attributes.Name));
-
-            AddAWSToRessource(resSpan, segment);
-
             var libSpan = new InstrumentationLibrarySpans();
             AddAWSToInstrumentationLibrary(libSpan, segment);
 
-            resSpan.InstrumentationLibrarySpans.Add(libSpan);
+            resSpan?.InstrumentationLibrarySpans.Add(libSpan);
 
             var span = new Span();
             libSpan.Spans.Add(span);
@@ -487,38 +633,71 @@ namespace XRay2OTLP
             span.SpanId = ConvertToByteString(ParseSpanId(xraySpanId));
             if (!String.IsNullOrEmpty(xrayParentSpanId))
                 span.ParentSpanId = ConvertToByteString(ParseSpanId(xrayParentSpanId));
+            else if (originResourceSpan != null)
+                span.Kind = Span.Types.SpanKind.Client;
             else
-                span.Kind = Span.Types.SpanKind.Server;
-
+                span.Kind = Span.Types.SpanKind.Server; //root 
+            
             AddXRayTraceContext(span, xrayTraceId, xraySpanId);
 
-            span.Name = Value(segment, Attributes.Name);
+            string spanName = string.Empty;  
 
             span.StartTimeUnixNano = ParseTimestampToNano(segment,Attributes.Start);
             span.EndTimeUnixNano = ParseTimestampToNano(segment, Attributes.End);
 
-            if (String.IsNullOrEmpty(origin))
-                origin = Value(segment, Properties.Origin);
-            TryAddAttribute(span, AWSSemanticConventions.AWSXRaySegmentOriginAttribute, origin);
+            AddLinks(span, segment);
 
-            AddAWSToSpan(span, segment);
-            AddHttp(span, segment);
+          
+#pragma warning disable CS8604
+            string serviceName = string.Empty;
+            string operationSpanName = AddAWS(resSpan, span, segment, out serviceName);
+#pragma warning restore CS8604
+
+            if (operationSpanName != String.Empty) spanName = operationSpanName;
+
+            operationSpanName = AddHttp(span, segment);
+            if (operationSpanName != String.Empty)
+            {
+                spanName = operationSpanName;
+            }
+
             AddSql(span, segment);
 
-            JsonElement elem;
-            if (span.Kind == Span.Types.SpanKind.Unspecified && !segment.TryGetProperty(Attributes.Namespace, out elem))
-                span.Kind = Span.Types.SpanKind.Internal;
+            if (String.IsNullOrEmpty(spanName))
+                span.Name = Value(segment, Attributes.Name);
+            else
+                span.Name = spanName;
 
-            if (!String.IsNullOrEmpty(xrayParentSpanId))
+            if (String.IsNullOrEmpty(origin))
+            {
+                span.Kind = Span.Types.SpanKind.Server;
+
+                string originProp = Value(segment, Properties.Origin);
+                if (!String.IsNullOrEmpty(originProp))
+                {
+                    origin = originProp;
+                    TryAddAttribute(span, AWSSemanticConventions.AWSXRaySegmentOriginAttribute, origin);
+                    TryAddResourceAttribute(resSpan, ResSemConv.AttributeServiceNamespace, origin);
+                      
+                    if (!string.IsNullOrEmpty(serviceName))
+                        TryAddResourceAttribute(resSpan, ResSemConv.AttributeServiceName, serviceName);
+                    else
+                        TryAddResourceAttribute(resSpan, ResSemConv.AttributeServiceName, origin);
+                }
+            }
+            
+            if (span.Kind == Span.Types.SpanKind.Unspecified)
+            {
                 span.Kind = Span.Types.SpanKind.Client;
-
+            }
+            
             JsonElement subSegments;
             if (segment.TryGetProperty(Properties.Subsegments, out subSegments))
             {
                 var subs= subSegments.EnumerateArray();
                 while (subs.MoveNext())
                 {
-                    AddSpansFromSegment(xrayTraceId, xraySpanId, origin, subs.Current, export);
+                    AddSpansFromSegment(xrayTraceId, xraySpanId, origin, resSpan, subs.Current, export);
                 }
             }
         }
@@ -537,7 +716,7 @@ namespace XRay2OTLP
             var s = root.RootElement.EnumerateArray();
             while (s.MoveNext())
             {
-                AddSpansFromSegment(String.Empty, String.Empty, String.Empty, s.Current, export);
+                AddSpansFromSegment(String.Empty, String.Empty, String.Empty, null, s.Current, export);
             }
 
             return export;
@@ -547,7 +726,6 @@ namespace XRay2OTLP
         //parsing response from batchgettraces
         public ExportTraceServiceRequest FromXRay(JsonDocument root)
         {
-
             var export = new ExportTraceServiceRequest();
             
             var t = root.RootElement.GetProperty(Traces.Root).EnumerateArray();
@@ -564,7 +742,7 @@ namespace XRay2OTLP
                     {
                         var segmentDoc = JsonDocument.Parse(segmentJsonStr);
 
-                        AddSpansFromSegment(traceId, String.Empty, String.Empty, segmentDoc.RootElement, export);
+                        AddSpansFromSegment(traceId, String.Empty, String.Empty, null,segmentDoc.RootElement, export);
                     }
                 }
 

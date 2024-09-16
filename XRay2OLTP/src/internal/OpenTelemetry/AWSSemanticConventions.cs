@@ -67,5 +67,10 @@ namespace OpenTelemetry
         //ApiGateway
         public const string AWSApiIDAttribute = "aws.apigateway.id";
         public const string AWSApiStageAttribute = "aws.apigateway.stage";
+
+
+        public const string RpcSystem = "aws-api";
+        public const string AWSFunctionArn= "aws.function_arn";
+        public const string AWSTopicArn = "aws.topic_arn";
     }
 }

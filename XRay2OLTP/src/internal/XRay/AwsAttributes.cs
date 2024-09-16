@@ -58,6 +58,10 @@ namespace XRay
         public const string ApiStage = "stage";
 
         public const string LambdaName = "function_name";
+        public const string LambdaArn = "function_arn";
+
+        public const string SNSArn = "topic_arn";
+        
 
     }
 }

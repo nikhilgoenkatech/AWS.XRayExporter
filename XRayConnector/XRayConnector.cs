@@ -119,7 +119,7 @@ namespace XRayConnector
 
                 var jsonDoc = JsonDocument.Parse(tracesJson);
 
-                var conv = new XRay2OTLP.Convert(null, false);
+                var conv = new XRay2OTLP.Convert(null);
                 var exportTraceServiceRequest = conv.FromXRaySegmentDocArray(jsonDoc);
 
                 var httpClient = _httpClientFactory.CreateClient("XRayConnector");
