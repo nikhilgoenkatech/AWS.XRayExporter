@@ -29,7 +29,23 @@ If you want to implement a similar fault-tolerant REST Api-Poller using AWS serv
 ### Pre-Requisites
 For reading from the AWS X-Ray REST Api, [create an AWS access key](https://docs.aws.amazon.com/powershell/latest/userguide/pstools-appendix-sign-up.html) with a policy that includes at least following actions ```xray:BatchGetTraces``` and ```xray:GetTraceSummaries```.
 
-### Running locally
+### Running in K8s (XRayConnectorContainerized)
+Step 1) Configure mssql-deployment.yml and mssql-secrets.yml
+
+Replace PLACEHOLDER with your password of choice to access tthe database.
+
+Step 2) Configure the AWS access key and OTLP endpoint in your *local.settings.json* 
+
+Step 3) Build & Deploy
+```
+docker build -t xrayconnectorcontainerized:latest -f ./xrayconnectorcontainerized/Dockerfile .
+docker tag xrayconnectorcontainerized:latest <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
+docker push <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
+cd .\XRayConnectorContainerized\
+func kubernetes deploy --name xrayconnector --image-name "<YOUR-REPOSITORY>/xrayconnectorcontainerized:latest" --secret-name "mssql-secrets" --max-replicas 5
+```
+
+### Running locally as Azure Function (XRayConnector)
 For details how to run an Azure Function locally see [Code and test Azure Functions locally](https://learn.microsoft.com/en-us/azure/azure-functions/functions-develop-local)
 
 Configure the AWS access key in your *local.settings.json* 
