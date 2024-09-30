@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Amazon.Runtime;
 using Amazon.XRay;
@@ -178,12 +179,11 @@ namespace XRayConnector
                     }
                 }
             }
-            
         }
 
         [FunctionName(nameof(RetrieveRecentTraces))]
         public async Task RetrieveRecentTraces(
-          [OrchestrationTrigger] IDurableOrchestrationContext context, ILogger log)
+            [OrchestrationTrigger] IDurableOrchestrationContext context, ILogger log)
         {
 
             var currentTime = context.CurrentUtcDateTime; //https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-code-constraints?tabs=csharp#dates-and-times
@@ -209,30 +209,81 @@ namespace XRayConnector
 
                 }
             }
-
         }
-
-        async Task<string> Execute(IDurableOrchestrationClient starter, ILogger log)
-        {
-            string instanceId = await starter.StartNewAsync(nameof(RetrieveRecentTraces), null);
-
-            log.LogInformation("Started orchestration with ID = '{instanceId}'.", instanceId);
-
-            return instanceId;
-        }
-
 
         //Do not use timer triggered functions to avoid overlap issues: https://stackoverflow.com/a/62640692
-        [FunctionName(nameof(ScheduledStart))]
-        public async Task ScheduledStart([TimerTrigger("0 */5 * * * *")] TimerInfo myTimer, [DurableClient] IDurableOrchestrationClient starter, ILogger log)
+        //[FunctionName(nameof(ScheduledStart))]
+        //public async Task ScheduledStart([TimerTrigger("0 */5 * * * *")] TimerInfo myTimer, [DurableClient] IDurableOrchestrationClient starter, ILogger log)
+        //{
+        //    await Execute(starter, log);
+        //}
+        //async Task<string> Execute(IDurableOrchestrationClient starter, ILogger log)
+        //{
+        //    string instanceId = await starter.StartNewAsync(nameof(RetrieveRecentTraces), null);
+        //    log.LogInformation("Started orchestration with ID = '{instanceId}'.", instanceId);
+        //    return instanceId;
+        //}
+        //[FunctionName(nameof(TestStart))]
+        //public async Task<HttpResponseMessage> TestStart(
+        //[HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
+        //[DurableClient] IDurableOrchestrationClient starter,
+        //ILogger log)
+        //{
+        //    log.LogWarning("TestStart");
+        //    string instanceId = await Execute(starter, log);
+        //    return starter.CreateCheckStatusResponse(req, instanceId);
+        //}
+        //...
+        //..
+        //.
+        // Instead kick-off a timer...
+        [FunctionName(nameof(TriggerPeriodicAPIPoller))]
+        public async Task<HttpResponseMessage> TriggerPeriodicAPIPoller(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
+            [DurableClient] IDurableOrchestrationClient starter,
+            ILogger log)
         {
-            await Execute(starter, log);
+            log.LogInformation("TriggerPeriodicAPIPoller");
+            //allow multiple instances... string instanceId = await Execute(starter, log);
+            //or singleton..
+            string instanceId = instanceId = "SinglePeriodicAPIPoller";
+
+            try
+            { 
+                await starter.StartNewAsync(nameof(PeriodicAPIPoller), instanceId);
+            }catch(Exception e)
+            {
+                log.LogError(e,"Unable to start perodic api poller");
+            }
+
+            return starter.CreateCheckStatusResponse(req, instanceId);
+
+        }
+
+        [FunctionName(nameof(PeriodicAPIPoller))]
+        public static async Task PeriodicAPIPoller(
+            [OrchestrationTrigger] IDurableOrchestrationContext context, 
+            ILogger log)
+        {
+            log.LogInformation("PeriodicAPIPoller");
+
+            var identityKey = Environment.GetEnvironmentVariable("AWS_IdentityKey");
+            if (String.IsNullOrEmpty(identityKey) || identityKey == "<YOUR-AWS-IDENTITY-KEY>")
+                log.LogWarning("Skip API polling - missing configuration!");
+            else
+                await context.CallActivityAsync(nameof(RetrieveRecentTraces), null);
+
+            // sleep for x minutes before next poll
+            DateTime nextCleanup = context.CurrentUtcDateTime.AddMinutes(5);
+            await context.CreateTimer(nextCleanup, CancellationToken.None);
+
+            context.ContinueAsNew(null);
         }
 
         [FunctionName(nameof(TestPing))]
         public Task<HttpResponseMessage> TestPing(
-         [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
-         ILogger log)
+            [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
+            ILogger log)
         {
             log.LogInformation(nameof(TestPing));
 
@@ -241,17 +292,6 @@ namespace XRayConnector
             return Task.FromResult(res);
         }
 
-        [FunctionName(nameof(TestStart))]
-        public async Task<HttpResponseMessage> TestStart(
-          [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
-          [DurableClient] IDurableOrchestrationClient starter,
-          ILogger log)
-        {
-            log.LogWarning("TestStart");
-
-            string instanceId = await Execute(starter, log);
-            return starter.CreateCheckStatusResponse(req, instanceId);
-        }
 
         #region Testing
 #if DEBUG

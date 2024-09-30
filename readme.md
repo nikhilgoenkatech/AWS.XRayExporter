@@ -32,18 +32,37 @@ For reading from the AWS X-Ray REST Api, [create an AWS access key](https://docs
 ### Running in K8s (XRayConnectorContainerized)
 Step 1) Configure mssql-deployment.yml and mssql-secrets.yml
 
-Replace PLACEHOLDER with your password of choice to access tthe database.
+Replace PLACEHOLDER with your password of choice to access the database.
 
 Step 2) Configure the AWS access key and OTLP endpoint in your *local.settings.json* 
 
-Step 3) Build & Deploy
+Step 3) Prepare database & KEDA (Powershell)
 ```
+kubectl apply -f ./mssql-deployment.yml -n mssql
+kubectl apply -f ./mssql-secrets.yml
+
+# Once database pod is ready...
+# ..get the name of the Pod running SQL Server
+$mssqlPod = kubectl get pods -n mssql -o jsonpath='{.items[0].metadata.name}'
+
+# Use sqlcmd.exe to create a database named "DurableDB". 
+# Replace 'PLACEHOLDER' with the password you used earlier
+kubectl exec -n mssql $mssqlPod -- /opt/mssql-tools18/bin/sqlcmd -S . -U sa -P "PLACEHOLDER" -Q "CREATE DATABASE [DurableDB] COLLATE Latin1_General_100_BIN2_UTF8"
+```
+
+Step 4) Build & deploy XRayConnector
+```
+# Replace '<YOUR-REPOSITORY>' with your target repository
 docker build -t xrayconnectorcontainerized:latest -f ./xrayconnectorcontainerized/Dockerfile .
 docker tag xrayconnectorcontainerized:latest <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
 docker push <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
 cd .\XRayConnectorContainerized\
 func kubernetes deploy --name xrayconnector --image-name "<YOUR-REPOSITORY>/xrayconnectorcontainerized:latest" --secret-name "mssql-secrets" --max-replicas 5
 ```
+
+Step 5) Kick-off periodic API-Poller 
+
+..by calling (GET) https://xxxx/api/TriggerPeriodicAPIPoller
 
 ### Running locally as Azure Function (XRayConnector)
 For details how to run an Azure Function locally see [Code and test Azure Functions locally](https://learn.microsoft.com/en-us/azure/azure-functions/functions-develop-local)
@@ -85,3 +104,13 @@ This is an open source project, and we gladly accept new contributions and contr
 ## License
 Licensed under Apache 2.0 license. See [LICENSE](LICENSE) for details.
 
+## WIP
+?webhooks are not configured. This may occur if the environment variable `WEBSITE_HOSTNAME` is not set (should be automatically set for Azure Functions). Try setting it to the appropiate URI to reach your app. For example: the DNS name of the app, or a value of the form <ip-address>:<port>.
+
+-> https://stackoverflow.com/questions/64400695/azure-durable-function-httpstart-failure-webhooks-are-not-configured
+
+-> https://github.com/Azure/azure-functions-host/pull/4462
+
+-> https://github.com/Azure/Azure-Functions/issues/1633
+
+--> https://learn.microsoft.com/en-us/azure/azure-functions/functions-app-settings#azurewebjobssecretstoragetype
