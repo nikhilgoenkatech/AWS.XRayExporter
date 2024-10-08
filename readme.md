@@ -32,23 +32,22 @@ If you want to implement a similar fault-tolerant REST Api-Poller using AWS serv
 For reading from the AWS X-Ray REST Api, [create an AWS access key](https://docs.aws.amazon.com/powershell/latest/userguide/pstools-appendix-sign-up.html) with a policy that includes at least following actions ```xray:BatchGetTraces``` and ```xray:GetTraceSummaries```.
 
 ### Running in K8s (XRayConnectorContainerized)
-Step 1) Build the XRayConnector container and push it to your target repository
+**Step 1)** Build the XRayConnector container and push it to your target repository
 ```
 # Replace '<YOUR-REPOSITORY>' with your target container registry
-docker build -t xrayconnectorcontainerized:latest -f ./Dockerfile .
+docker build -t xrayconnectorcontainerized:latest -f ./xrayconnectorcontainerized/Dockerfile .
 docker tag xrayconnectorcontainerized:latest <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
 docker push <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
 ```
-Step 2) Make sure KEDA v2 is up and running
+**Step 2)** Make sure KEDA v2 is up and running
 
 For more details how to install KEDA, [see](https://keda.sh/docs/2.15/deploy/)
 
-
-Step 3) Configure database mssql-deployment.yml and mssql-secrets.yml
+**Step 3)** Configure database mssql-deployment.yml and mssql-secrets.yml
 
 Replace PLACEHOLDER with your password of choice to access the database.
 
-Step 4) Deploy mssql server and create the database
+**Step 4)** Deploy mssql server and create the database
 ```
 kubectl apply -f ./mssql-secrets.yml
 kubectl apply -f ./mssql-deployment.yml -n mssql
@@ -62,26 +61,27 @@ $mssqlPod = kubectl get pods -n mssql -o jsonpath='{.items[0].metadata.name}'
 kubectl exec -n mssql $mssqlPod -- /opt/mssql-tools18/bin/sqlcmd -S . -U sa -P "PLACEHOLDER" -Q "CREATE DATABASE [DurableDB] COLLATE Latin1_General_100_BIN2_UTF8"
 ```
 
-Step 5) Configure the polling & fowarding of X-Ray data in connector-config.yml
+**Step 5)** Configure the polling & fowarding of X-Ray data in connector-config.yml
 
-Replace the necessary placeholders with proper values. 
+Replace the necessary placeholders with proper values providing AWS secrets, OTLP endpoints, ..
 
-Step 6) Configure the Function keys & registry in xrayconnector.yml
+**Step 6)** Configure the Function keys & registry in xrayconnector.yml
 
 * Replace all keys ( host.master, host.function.default, ..) with new ones, encoded in base64. 
 * Replace &lt;YOUR-REPOSITORY&gt; with the registry hosting your image
 
-Step 7) Deploy XRayConnector and config
+**Step 7)** Deploy XRayConnector and config
 ```
 kubectl apply -f .\connector-config.yml
 kubectl apply -f .\xrayconnector.yml
 
-#check deployment status kubectl rollout status deployment xrayconnector
+#check deployment status 
+kubectl rollout status deployment xrayconnector
 ```
 
-Step 6) Kick-off periodic API-Poller 
+**Step 8)** Kick-off periodic API-Poller 
 
-POST https://xxxx/api/TriggerPeriodicAPIPoller?code=&lt;YOUR-FUNCTION-HOST-MASTER-KEY&gt;
+```POST https://xxxx/api/TriggerPeriodicAPIPoller?code=<YOUR-FUNCTION-HOST-MASTER-KEY>```
 
 See also ```test.http``` to run the requests in VSCode via the [REST Client extension](https://marketplace.visualstudio.com/items?itemName=humao.rest-client).
 
