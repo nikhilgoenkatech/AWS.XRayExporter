@@ -9,16 +9,18 @@ As AWS X-Ray only supports its proprietary trace-context, a transaction which pa
 
 ## How does it work?
 
-The solution contains 2 projects: 
+The solution contains several projects: 
+
 #### XRay2OTLP
 XRayOTLP is a library to convert AWS X-Ray segment documents into the OpenTelemetry format OTLP. 
 
-#### XRayConnector
+#### XRayConnector / XRayConnectorContainerized
 XRayConnector implements the polling logic for the AWS X-Ray REST-Api: https://docs.aws.amazon.com/xray/latest/devguide/xray-api-gettingdata.html. The logic is implemented using [Azure Durable Function](https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-overview?tabs=in-process%2Cv3-model%2Cv1-model&pivots=csharp) framework, which abstracts away the complexity to manage a fault-tolerant and reliable polling mechanism as behind the scenes the framework manages state, checkpoints, and automatic restarts. 
 
 It can be deployed either on Azure Functions or as well in Kubernetes (K8s), which makes it suitable to be deployed directly in AWS. For more details on using Azure Durable Functions in Kubernetes see [here](https://microsoft.github.io/durabletask-mssql/#/kubernetes). 
 
-The **polling interval** to retrieve recent traces is **5 minutes**. A timer triggered function automatically starts the polling. 
+The default **polling interval** to retrieve recent traces is **3 minutes** but can be changed by configuration. 
+**The automatic polling needs to be started** (and stopped) via Http triggered functions (*TriggerPeriodicAPIPoller* and *TerminatePeriodicAPIPoller*). Both methods are protected with the the Admin-level authorization key.
 
 The **supported OpenTelemetry protocol** is [OTLP/HTTP JSON format](https://opentelemetry.io/docs/reference/specification/protocol/otlp/#otlphttp)
 
@@ -30,18 +32,28 @@ If you want to implement a similar fault-tolerant REST Api-Poller using AWS serv
 For reading from the AWS X-Ray REST Api, [create an AWS access key](https://docs.aws.amazon.com/powershell/latest/userguide/pstools-appendix-sign-up.html) with a policy that includes at least following actions ```xray:BatchGetTraces``` and ```xray:GetTraceSummaries```.
 
 ### Running in K8s (XRayConnectorContainerized)
-Step 1) Configure mssql-deployment.yml and mssql-secrets.yml
+Step 1) Build the XRayConnector container and push it to your target repository
+```
+# Replace '<YOUR-REPOSITORY>' with your target container registry
+docker build -t xrayconnectorcontainerized:latest -f ./Dockerfile .
+docker tag xrayconnectorcontainerized:latest <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
+docker push <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
+```
+Step 2) Make sure KEDA v2 is up and running
+
+For more details how to install KEDA, [see](https://keda.sh/docs/2.15/deploy/)
+
+
+Step 3) Configure database mssql-deployment.yml and mssql-secrets.yml
 
 Replace PLACEHOLDER with your password of choice to access the database.
 
-Step 2) Configure the AWS access key and OTLP endpoint in your *local.settings.json* 
-
-Step 3) Prepare database & KEDA (Powershell)
+Step 4) Deploy mssql server and create the database
 ```
-kubectl apply -f ./mssql-deployment.yml -n mssql
 kubectl apply -f ./mssql-secrets.yml
+kubectl apply -f ./mssql-deployment.yml -n mssql
 
-# Once database pod is ready...
+# Once pod is ready...
 # ..get the name of the Pod running SQL Server
 $mssqlPod = kubectl get pods -n mssql -o jsonpath='{.items[0].metadata.name}'
 
@@ -50,22 +62,34 @@ $mssqlPod = kubectl get pods -n mssql -o jsonpath='{.items[0].metadata.name}'
 kubectl exec -n mssql $mssqlPod -- /opt/mssql-tools18/bin/sqlcmd -S . -U sa -P "PLACEHOLDER" -Q "CREATE DATABASE [DurableDB] COLLATE Latin1_General_100_BIN2_UTF8"
 ```
 
-Step 4) Build & deploy XRayConnector
+Step 5) Configure the polling & fowarding of X-Ray data in connector-config.yml
+
+Replace the necessary placeholders with proper values. 
+
+Step 6) Configure the Function keys & registry in xrayconnector.yml
+
+* Replace all keys ( host.master, host.function.default, ..) with new ones, encoded in base64. 
+* Replace &lt;YOUR-REPOSITORY&gt; with the registry hosting your image
+
+Step 7) Deploy XRayConnector and config
 ```
-# Replace '<YOUR-REPOSITORY>' with your target repository
-docker build -t xrayconnectorcontainerized:latest -f ./xrayconnectorcontainerized/Dockerfile .
-docker tag xrayconnectorcontainerized:latest <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
-docker push <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
-cd .\XRayConnectorContainerized\
-func kubernetes deploy --name xrayconnector --image-name "<YOUR-REPOSITORY>/xrayconnectorcontainerized:latest" --secret-name "mssql-secrets" --max-replicas 5
+kubectl apply -f .\connector-config.yml
+kubectl apply -f .\xrayconnector.yml
+
+#check deployment status kubectl rollout status deployment xrayconnector
 ```
 
-Step 5) Kick-off periodic API-Poller 
+Step 6) Kick-off periodic API-Poller 
 
-..by calling (GET) https://xxxx/api/TriggerPeriodicAPIPoller
+POST https://xxxx/api/TriggerPeriodicAPIPoller?code=&lt;YOUR-FUNCTION-HOST-MASTER-KEY&gt;
+
+See also ```test.http``` to run the requests in VSCode via the [REST Client extension](https://marketplace.visualstudio.com/items?itemName=humao.rest-client).
+
 
 ### Running locally as Azure Function (XRayConnector)
-For details how to run an Azure Function locally see [Code and test Azure Functions locally](https://learn.microsoft.com/en-us/azure/azure-functions/functions-develop-local)
+For details how to run an Azure Function locally see [Code and test Azure Functions locally](https://learn.microsoft.com/en-us/azure/azure-functions/functions-develop-local).
+
+*Note* The current project settings are targeting the windows platform. 
 
 Configure the AWS access key in your *local.settings.json* 
 ```
@@ -84,7 +108,7 @@ Configure the AWS access key in your *local.settings.json*
 ```
 and provide additional configuration required on your OTLP endpoint you want to send the traces to.
 
-### Sending a sample trace for testing
+### Sending a sample trace for testing (ONLY when compiled in DEBUG mode)
 The service includes an endpoint ```/TestGenerateSampleTrace```, which sends a sample trace into X-Ray. This feature requires additional actions granted in your AWS IAM policy: ```xray:PutTelemetryRecords``` and ```xray:PutTraceSegments```
 
 ### Original Trace in X-Ray
@@ -93,7 +117,9 @@ The service includes an endpoint ```/TestGenerateSampleTrace```, which sends a s
 ### Trace exported into [Dynatrace](http://www.dynatrace.com)
 ![Dynatrace](images/dynatrace-1.png)
 ![Span setails](images/dynatrace-2.png)
+
 ## Release Notes
+* v0.9 Added a new project XRayConnectorContainerized +  manifest for k8s deployment
 * v0.8 Add mapping for SQS, SNS, DynamoDB and Links
 * v0.6 Add mappings for ApiGateway and Lambda
 * v0.5 Initial release 
@@ -103,14 +129,3 @@ This is an open source project, and we gladly accept new contributions and contr
 
 ## License
 Licensed under Apache 2.0 license. See [LICENSE](LICENSE) for details.
-
-## WIP
-?webhooks are not configured. This may occur if the environment variable `WEBSITE_HOSTNAME` is not set (should be automatically set for Azure Functions). Try setting it to the appropiate URI to reach your app. For example: the DNS name of the app, or a value of the form <ip-address>:<port>.
-
--> https://stackoverflow.com/questions/64400695/azure-durable-function-httpstart-failure-webhooks-are-not-configured
-
--> https://github.com/Azure/azure-functions-host/pull/4462
-
--> https://github.com/Azure/Azure-Functions/issues/1633
-
---> https://learn.microsoft.com/en-us/azure/azure-functions/functions-app-settings#azurewebjobssecretstoragetype

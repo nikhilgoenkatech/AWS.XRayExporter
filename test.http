@@ -1,0 +1,22 @@
+
+### ### Local testing with kubernetes (e.g. minikube)
+#### Test request
+GET http://localhost/api/TestPing
+
+#### Start workflow - w sample masterkey
+POST http://localhost/api/TriggerPeriodicAPIPoller?code=<YOUR-MASTER-KEY>
+
+#### Terminate workflow - sample masterkey
+POST http://localhost/api/TerminatePeriodicAPIPoller?code=<YOUR-MASTER-KEY>
+
+
+### ### Local testing (non-k8s)
+#### Test request
+GET http://localhost:7217/api/TestPing 
+
+### Start workflow
+POST http://localhost:7217/api/TriggerPeriodicAPIPoller 
+
+###
+### Terminate workfoow
+POST http://localhost:7217/api/TerminatePeriodicAPIPoller 

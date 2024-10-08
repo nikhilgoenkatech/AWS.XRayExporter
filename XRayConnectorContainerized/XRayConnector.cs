@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Reactive;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -20,6 +22,7 @@ namespace XRayConnector
 {
     public class XRayConnector
     {
+        private const string PeriodicAPIPollerSingletoninstanceId = "SinglePeriodicAPIPoller";
 
         private readonly IHttpClientFactory _httpClientFactory;
         public XRayConnector(IHttpClientFactory httpClientFactory)
@@ -187,12 +190,14 @@ namespace XRayConnector
         {
 
             var currentTime = context.CurrentUtcDateTime; //https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-code-constraints?tabs=csharp#dates-and-times
+            var pollingInterval = -1 * context.GetInput<uint>();
+
             var getTraces = new TracesRequest()
             {
                 StartTime = currentTime.AddMinutes(-5),
                 EndTime = currentTime
             };
-            
+
             var traces = await context.CallActivityAsync<TracesResult>(nameof(GetRecentTraceIds), getTraces);
             if (traces != null)
             {
@@ -239,24 +244,41 @@ namespace XRayConnector
         // Instead kick-off a timer...
         [FunctionName(nameof(TriggerPeriodicAPIPoller))]
         public async Task<HttpResponseMessage> TriggerPeriodicAPIPoller(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
-            [DurableClient] IDurableOrchestrationClient starter,
+            [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
+            [DurableClient] IDurableOrchestrationClient client,
             ILogger log)
         {
             log.LogInformation("TriggerPeriodicAPIPoller");
-            //allow multiple instances... string instanceId = await Execute(starter, log);
-            //or singleton..
-            string instanceId = instanceId = "SinglePeriodicAPIPoller";
+
+            string instanceId = PeriodicAPIPollerSingletoninstanceId; 
 
             try
-            { 
-                await starter.StartNewAsync(nameof(PeriodicAPIPoller), instanceId);
-            }catch(Exception e)
             {
-                log.LogError(e,"Unable to start perodic api poller");
+                await client.StartNewAsync(nameof(PeriodicAPIPoller), instanceId);
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Unable to start 'PeriodicAPIPoller'");
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+                res.Content = new StringContent("{status:\"Failed\"}", null, "application/json");
             }
 
-            return starter.CreateCheckStatusResponse(req, instanceId);
+            try
+            {
+                return client.CreateCheckStatusResponse(req, instanceId);
+            }
+            catch(Exception ex) 
+            {
+                //CreateCheckStatusResponse doesn't work when deployed on K8s, as it cannot resovle the webhook from the env-var
+                //https://github.com/Azure/azure-functions-host/issues/9024
+                log.LogWarning("Unable to execute 'CreateCheckStatusResponse': "+ex.Message);
+                    
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+                res.Content = new StringContent("{status:\"OK\"}", null, "application/json");
+
+                return res;
+            }
 
         }
 
@@ -265,19 +287,51 @@ namespace XRayConnector
             [OrchestrationTrigger] IDurableOrchestrationContext context, 
             ILogger log)
         {
-            log.LogInformation("PeriodicAPIPoller");
+            uint PollingIntervalMinutes = 3;
+            if (!UInt32.TryParse(Environment.GetEnvironmentVariable("PollingIntervalMinutes"), out PollingIntervalMinutes))
+                log.LogWarning("Unable to parse PollingIntervalMinutes, using default value");
+
+            log.LogInformation("PeriodicAPIPoller @" + PollingIntervalMinutes + "m");
 
             var identityKey = Environment.GetEnvironmentVariable("AWS_IdentityKey");
             if (String.IsNullOrEmpty(identityKey) || identityKey == "<YOUR-AWS-IDENTITY-KEY>")
                 log.LogWarning("Skip API polling - missing configuration!");
             else
-                await context.CallActivityAsync(nameof(RetrieveRecentTraces), null);
-
+            {
+                await context.CallSubOrchestratorAsync(nameof(RetrieveRecentTraces), PollingIntervalMinutes);
+            }
+            
             // sleep for x minutes before next poll
-            DateTime nextCleanup = context.CurrentUtcDateTime.AddMinutes(5);
+            DateTime nextCleanup = context.CurrentUtcDateTime.AddMinutes(PollingIntervalMinutes);
             await context.CreateTimer(nextCleanup, CancellationToken.None);
 
             context.ContinueAsNew(null);
+        }
+
+        //Due to a bug to get admin urls from CreateAndCheckResponse, add a dedicated function to terminate orchestration.
+        [FunctionName(nameof(TerminatePeriodicAPIPoller))]
+        public async Task<HttpResponseMessage> TerminatePeriodicAPIPoller(
+        [HttpTrigger(AuthorizationLevel.Admin, "post")] HttpRequestMessage req,
+        [DurableClient] IDurableOrchestrationClient client, ILogger log)
+        {
+            try
+            {
+                log.LogInformation("TerminatePeriodicAPIPoller");
+
+                await client.TerminateAsync(PeriodicAPIPollerSingletoninstanceId, "Manually aborted");
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+                res.Content = new StringContent("{status:\"Success\"}", null, "application/json");
+                return res;
+            }
+            catch(Exception ex)
+            {
+                log.LogError(ex, "Failed to terminate '" + PeriodicAPIPollerSingletoninstanceId + "'");
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
+                res.Content = new StringContent("{status:\"Failed\"}", null, "application/json");
+                return res;
+            }
         }
 
         [FunctionName(nameof(TestPing))]
