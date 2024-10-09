@@ -23,6 +23,9 @@ namespace XRayConnector
     public class XRayConnector
     {
         private const string PeriodicAPIPollerSingletoninstanceId = "SinglePeriodicAPIPoller";
+        private const string AWSIdentityKey = "AWS_IdentityKey";
+        private const string AWSSecretKey = "AWS_SecretKey";
+
 
         private readonly IHttpClientFactory _httpClientFactory;
         public XRayConnector(IHttpClientFactory httpClientFactory)
@@ -33,7 +36,7 @@ namespace XRayConnector
         public async Task<TracesResult> GetTraces(GetTraceSummariesRequest req, ILogger log)
         {
 
-            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable("AWS_IdentityKey"), Environment.GetEnvironmentVariable("AWS_SecretKey"));
+            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable(AWSIdentityKey), Environment.GetEnvironmentVariable(AWSSecretKey));
             
             var resp = await xray.GetTraceSummariesAsync(req);
 
@@ -72,7 +75,7 @@ namespace XRayConnector
 
         async Task<TraceDetailsResult> GetTraceDetails(BatchGetTracesRequest req, ILogger log)
         {
-            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable("AWS_IdentityKey"), Environment.GetEnvironmentVariable("AWS_SecretKey"));
+            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable(AWSIdentityKey), Environment.GetEnvironmentVariable(AWSSecretKey));
             BatchGetTracesResponse resp = await xray.BatchGetTracesAsync(req);
             
             //serialize segements into a json array, to avoid additional (de)serialization overhead
@@ -293,7 +296,7 @@ namespace XRayConnector
 
             log.LogInformation("PeriodicAPIPoller @" + PollingIntervalMinutes + "m");
 
-            var identityKey = Environment.GetEnvironmentVariable("AWS_IdentityKey");
+            var identityKey = Environment.GetEnvironmentVariable(AWSIdentityKey);
             if (String.IsNullOrEmpty(identityKey) || identityKey == "<YOUR-AWS-IDENTITY-KEY>")
                 log.LogWarning("Skip API polling - missing configuration!");
             else
@@ -397,7 +400,7 @@ namespace XRayConnector
         {
             log.LogWarning(nameof(TestGenerateSampleTrace));
 
-            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable("AWS_IdentityKey"), Environment.GetEnvironmentVariable("AWS_SecretKey"));
+            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable(AWSIdentityKey), Environment.GetEnvironmentVariable(AWSSecretKey));
             PutTraceSegmentsRequest seg = new PutTraceSegmentsRequest();
             string rootSegment = "{\"id\":\"194fcc8747581230\",\"name\":\"Scorekeep\",\"start_time\":@S1,\"end_time\":@E1,\"http\":{\"request\":{\"url\":\"http://scorekeep.elasticbeanstalk.com/api/user\",\"method\":\"POST\",\"user_agent\":\"Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36\",\"client_ip\":\"205.251.233.183\"},\"response\":{\"status\":200}},\"aws\":{\"elastic_beanstalk\":{\"version_label\":\"app-abb9-170708_002045\",\"deployment_id\":406,\"environment_name\":\"scorekeep-dev\"},\"ec2\":{\"availability_zone\":\"us-west-2c\",\"instance_id\":\"i-0cd9e448944061b4a\"},\"xray\":{\"sdk_version\":\"1.1.2\",\"sdk\":\"X-Ray for Java\"}},\"service\":{},\"trace_id\":\"@TRACEID\",\"user\":\"5M388M1E\",\"origin\":\"AWS::ElasticBeanstalk::Environment\",\"subsegments\":[{\"id\":\"0c544c1b1bbff948\",\"name\":\"Lambda\",\"start_time\":@S1_1,\"end_time\":@E1_1,\"http\":{\"response\":{\"status\":200,\"content_length\":14}},\"aws\":{\"log_type\":\"None\",\"status_code\":200,\"function_name\":\"random-name\",\"invocation_type\":\"RequestResponse\",\"operation\":\"Invoke\",\"request_id\":\"ac086670-6373-11e7-a174-f31b3397f190\",\"resource_names\":[\"random-name\"]},\"namespace\":\"aws\"},{\"id\":\"071684f2e555e571\",\"name\":\"## UserModel.saveUser\",\"start_time\":@S1_1,\"end_time\":@E1_1,\"metadata\":{\"debug\":{\"test\":\"Metadata string from UserModel.saveUser\"}},\"subsegments\":[{\"id\":\"4cd3f10b76c624b4\",\"name\":\"DynamoDB\",\"start_time\":@S1_1_1,\"end_time\":@E1_1_1,\"http\":{\"response\":{\"status\":200,\"content_length\":57}},\"aws\":{\"table_name\":\"scorekeep-user\",\"operation\":\"UpdateItem\",\"request_id\":\"MFQ8CGJ3JTDDVVVASUAAJGQ6NJ82F738BOB4KQNSO5AEMVJF66Q9\",\"resource_names\":[\"scorekeep-user\"]},\"namespace\":\"aws\"}]}]}";
 
@@ -425,7 +428,7 @@ namespace XRayConnector
 
       
 #endif
-#endregion
+        #endregion
 
     }
 }

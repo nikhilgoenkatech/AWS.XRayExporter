@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Reactive;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Amazon.Runtime;
 using Amazon.XRay;
@@ -19,6 +22,10 @@ namespace XRayConnector
 {
     public class XRayConnector
     {
+        private const string PeriodicAPIPollerSingletoninstanceId = "SinglePeriodicAPIPoller";
+        private const string AWSIdentityKey = "AWS_IdentityKey";
+        private const string AWSSecretKey = "AWS_SecretKey";
+
 
         private readonly IHttpClientFactory _httpClientFactory;
         public XRayConnector(IHttpClientFactory httpClientFactory)
@@ -29,8 +36,8 @@ namespace XRayConnector
         public async Task<TracesResult> GetTraces(GetTraceSummariesRequest req, ILogger log)
         {
 
-            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable("AWS_IdentityKey"), Environment.GetEnvironmentVariable("AWS_SecretKey"));
-            
+            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable(AWSIdentityKey), Environment.GetEnvironmentVariable(AWSSecretKey));
+
             var resp = await xray.GetTraceSummariesAsync(req);
 
             if (resp.TraceSummaries.Count > 0)
@@ -48,7 +55,7 @@ namespace XRayConnector
             }
             else
                 return null;
-            
+
         }
 
         [FunctionName(nameof(GetRecentTraceIds))]
@@ -64,13 +71,13 @@ namespace XRayConnector
 
             return await GetTraces(reqObj, log);
         }
-      
+
 
         async Task<TraceDetailsResult> GetTraceDetails(BatchGetTracesRequest req, ILogger log)
         {
-            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable("AWS_IdentityKey"), Environment.GetEnvironmentVariable("AWS_SecretKey"));
+            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable(AWSIdentityKey), Environment.GetEnvironmentVariable(AWSSecretKey));
             BatchGetTracesResponse resp = await xray.BatchGetTracesAsync(req);
-            
+
             //serialize segements into a json array, to avoid additional (de)serialization overhead
             StringBuilder sb = new StringBuilder();
             sb.Append('[');
@@ -102,7 +109,7 @@ namespace XRayConnector
         {
             var reqObj = new BatchGetTracesRequest()
             {
-                TraceIds = new List<string>(req.TraceIds), 
+                TraceIds = new List<string>(req.TraceIds),
                 NextToken = req.NextToken
             };
 
@@ -143,7 +150,8 @@ namespace XRayConnector
                     throw new Exception("Couldn't send span " + (res.StatusCode));
                 }
 
-            }catch (Exception e)
+            }
+            catch (Exception e)
             {
                 log.LogError(e, "Couldn't process tracedetails");
 
@@ -178,21 +186,22 @@ namespace XRayConnector
                     }
                 }
             }
-            
         }
 
         [FunctionName(nameof(RetrieveRecentTraces))]
         public async Task RetrieveRecentTraces(
-          [OrchestrationTrigger] IDurableOrchestrationContext context, ILogger log)
+            [OrchestrationTrigger] IDurableOrchestrationContext context, ILogger log)
         {
 
             var currentTime = context.CurrentUtcDateTime; //https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-code-constraints?tabs=csharp#dates-and-times
+            var pollingInterval = -1 * context.GetInput<uint>();
+
             var getTraces = new TracesRequest()
             {
                 StartTime = currentTime.AddMinutes(-5),
                 EndTime = currentTime
             };
-            
+
             var traces = await context.CallActivityAsync<TracesResult>(nameof(GetRecentTraceIds), getTraces);
             if (traces != null)
             {
@@ -209,27 +218,140 @@ namespace XRayConnector
 
                 }
             }
-
         }
-
-        async Task<string> Execute(IDurableOrchestrationClient starter, ILogger log)
-        {
-            string instanceId = await starter.StartNewAsync(nameof(RetrieveRecentTraces), null);
-
-            log.LogInformation("Started orchestration with ID = '{instanceId}'.", instanceId);
-
-            return instanceId;
-        }
-
 
         //Do not use timer triggered functions to avoid overlap issues: https://stackoverflow.com/a/62640692
-        [FunctionName(nameof(ScheduledStart))]
-        public async Task ScheduledStart([TimerTrigger("0 */5 * * * *")] TimerInfo myTimer, [DurableClient] IDurableOrchestrationClient starter, ILogger log)
+        //[FunctionName(nameof(ScheduledStart))]
+        //public async Task ScheduledStart([TimerTrigger("0 */5 * * * *")] TimerInfo myTimer, [DurableClient] IDurableOrchestrationClient starter, ILogger log)
+        //{
+        //    await Execute(starter, log);
+        //}
+        //async Task<string> Execute(IDurableOrchestrationClient starter, ILogger log)
+        //{
+        //    string instanceId = await starter.StartNewAsync(nameof(RetrieveRecentTraces), null);
+        //    log.LogInformation("Started orchestration with ID = '{instanceId}'.", instanceId);
+        //    return instanceId;
+        //}
+        //[FunctionName(nameof(TestStart))]
+        //public async Task<HttpResponseMessage> TestStart(
+        //[HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
+        //[DurableClient] IDurableOrchestrationClient starter,
+        //ILogger log)
+        //{
+        //    log.LogWarning("TestStart");
+        //    string instanceId = await Execute(starter, log);
+        //    return starter.CreateCheckStatusResponse(req, instanceId);
+        //}
+        //...
+        //..
+        //.
+        // Instead kick-off a timer...
+        [FunctionName(nameof(TriggerPeriodicAPIPoller))]
+        public async Task<HttpResponseMessage> TriggerPeriodicAPIPoller(
+            [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
+            [DurableClient] IDurableOrchestrationClient client,
+            ILogger log)
         {
-            await Execute(starter, log);
+            log.LogInformation("TriggerPeriodicAPIPoller");
+
+            string instanceId = PeriodicAPIPollerSingletoninstanceId;
+
+            try
+            {
+                await client.StartNewAsync(nameof(PeriodicAPIPoller), instanceId);
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Unable to start 'PeriodicAPIPoller'");
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+                res.Content = new StringContent("{status:\"Failed\"}", null, "application/json");
+            }
+
+            try
+            {
+                return client.CreateCheckStatusResponse(req, instanceId);
+            }
+            catch (Exception ex)
+            {
+                //CreateCheckStatusResponse doesn't work when deployed on K8s, as it cannot resovle the webhook from the env-var
+                //https://github.com/Azure/azure-functions-host/issues/9024
+                log.LogWarning("Unable to execute 'CreateCheckStatusResponse': " + ex.Message);
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+                res.Content = new StringContent("{status:\"OK\"}", null, "application/json");
+
+                return res;
+            }
+
         }
 
-#region Testing
+        [FunctionName(nameof(PeriodicAPIPoller))]
+        public static async Task PeriodicAPIPoller(
+            [OrchestrationTrigger] IDurableOrchestrationContext context,
+            ILogger log)
+        {
+            uint PollingIntervalMinutes = 3;
+            if (!UInt32.TryParse(Environment.GetEnvironmentVariable("PollingIntervalMinutes"), out PollingIntervalMinutes))
+                log.LogWarning("Unable to parse PollingIntervalMinutes, using default value");
+
+            log.LogInformation("PeriodicAPIPoller @" + PollingIntervalMinutes + "m");
+
+            var identityKey = Environment.GetEnvironmentVariable(AWSIdentityKey);
+            if (String.IsNullOrEmpty(identityKey) || identityKey == "<YOUR-AWS-IDENTITY-KEY>")
+                log.LogWarning("Skip API polling - missing configuration!");
+            else
+            {
+                await context.CallSubOrchestratorAsync(nameof(RetrieveRecentTraces), PollingIntervalMinutes);
+            }
+
+            // sleep for x minutes before next poll
+            DateTime nextCleanup = context.CurrentUtcDateTime.AddMinutes(PollingIntervalMinutes);
+            await context.CreateTimer(nextCleanup, CancellationToken.None);
+
+            context.ContinueAsNew(null);
+        }
+
+        //Due to a bug to get admin urls from CreateAndCheckResponse, add a dedicated function to terminate orchestration.
+        [FunctionName(nameof(TerminatePeriodicAPIPoller))]
+        public async Task<HttpResponseMessage> TerminatePeriodicAPIPoller(
+        [HttpTrigger(AuthorizationLevel.Admin, "post")] HttpRequestMessage req,
+        [DurableClient] IDurableOrchestrationClient client, ILogger log)
+        {
+            try
+            {
+                log.LogInformation("TerminatePeriodicAPIPoller");
+
+                await client.TerminateAsync(PeriodicAPIPollerSingletoninstanceId, "Manually aborted");
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+                res.Content = new StringContent("{status:\"Success\"}", null, "application/json");
+                return res;
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Failed to terminate '" + PeriodicAPIPollerSingletoninstanceId + "'");
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
+                res.Content = new StringContent("{status:\"Failed\"}", null, "application/json");
+                return res;
+            }
+        }
+
+        [FunctionName(nameof(TestPing))]
+        public Task<HttpResponseMessage> TestPing(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
+            ILogger log)
+        {
+            log.LogInformation(nameof(TestPing));
+
+            var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+            res.Content = new StringContent("{status:\"ping successful\"}", null, "application/json");
+            return Task.FromResult(res);
+        }
+
+
+        #region Testing
 #if DEBUG
 
 
@@ -279,7 +401,7 @@ namespace XRayConnector
         {
             log.LogWarning(nameof(TestGenerateSampleTrace));
 
-            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable("AWS_IdentityKey"), Environment.GetEnvironmentVariable("AWS_SecretKey"));
+            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable(AWSIdentityKey), Environment.GetEnvironmentVariable(AWSSecretKey));
             PutTraceSegmentsRequest seg = new PutTraceSegmentsRequest();
             string rootSegment = "{\"id\":\"194fcc8747581230\",\"name\":\"Scorekeep\",\"start_time\":@S1,\"end_time\":@E1,\"http\":{\"request\":{\"url\":\"http://scorekeep.elasticbeanstalk.com/api/user\",\"method\":\"POST\",\"user_agent\":\"Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36\",\"client_ip\":\"205.251.233.183\"},\"response\":{\"status\":200}},\"aws\":{\"elastic_beanstalk\":{\"version_label\":\"app-abb9-170708_002045\",\"deployment_id\":406,\"environment_name\":\"scorekeep-dev\"},\"ec2\":{\"availability_zone\":\"us-west-2c\",\"instance_id\":\"i-0cd9e448944061b4a\"},\"xray\":{\"sdk_version\":\"1.1.2\",\"sdk\":\"X-Ray for Java\"}},\"service\":{},\"trace_id\":\"@TRACEID\",\"user\":\"5M388M1E\",\"origin\":\"AWS::ElasticBeanstalk::Environment\",\"subsegments\":[{\"id\":\"0c544c1b1bbff948\",\"name\":\"Lambda\",\"start_time\":@S1_1,\"end_time\":@E1_1,\"http\":{\"response\":{\"status\":200,\"content_length\":14}},\"aws\":{\"log_type\":\"None\",\"status_code\":200,\"function_name\":\"random-name\",\"invocation_type\":\"RequestResponse\",\"operation\":\"Invoke\",\"request_id\":\"ac086670-6373-11e7-a174-f31b3397f190\",\"resource_names\":[\"random-name\"]},\"namespace\":\"aws\"},{\"id\":\"071684f2e555e571\",\"name\":\"## UserModel.saveUser\",\"start_time\":@S1_1,\"end_time\":@E1_1,\"metadata\":{\"debug\":{\"test\":\"Metadata string from UserModel.saveUser\"}},\"subsegments\":[{\"id\":\"4cd3f10b76c624b4\",\"name\":\"DynamoDB\",\"start_time\":@S1_1_1,\"end_time\":@E1_1_1,\"http\":{\"response\":{\"status\":200,\"content_length\":57}},\"aws\":{\"table_name\":\"scorekeep-user\",\"operation\":\"UpdateItem\",\"request_id\":\"MFQ8CGJ3JTDDVVVASUAAJGQ6NJ82F738BOB4KQNSO5AEMVJF66Q9\",\"resource_names\":[\"scorekeep-user\"]},\"namespace\":\"aws\"}]}]}";
 
@@ -303,21 +425,11 @@ namespace XRayConnector
             return res;
         }
 
-        [FunctionName(nameof(TestStart))]
-        public async Task<HttpResponseMessage> TestStart(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
-            [DurableClient] IDurableOrchestrationClient starter,
-            ILogger log)
-        {
-            log.LogWarning("TestStart");
-
-            string instanceId = await Execute(starter, log);
-            return starter.CreateCheckStatusResponse(req, instanceId);
-        }
+      
 
       
 #endif
-#endregion
+        #endregion
 
     }
 }
