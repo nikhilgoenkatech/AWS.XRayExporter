@@ -37,7 +37,7 @@ namespace XRayConnector
         {
 
             var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable(AWSIdentityKey), Environment.GetEnvironmentVariable(AWSSecretKey));
-
+            
             var resp = await xray.GetTraceSummariesAsync(req);
 
             if (resp.TraceSummaries.Count > 0)
@@ -55,7 +55,7 @@ namespace XRayConnector
             }
             else
                 return null;
-
+            
         }
 
         [FunctionName(nameof(GetRecentTraceIds))]
@@ -71,13 +71,13 @@ namespace XRayConnector
 
             return await GetTraces(reqObj, log);
         }
-
+      
 
         async Task<TraceDetailsResult> GetTraceDetails(BatchGetTracesRequest req, ILogger log)
         {
             var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable(AWSIdentityKey), Environment.GetEnvironmentVariable(AWSSecretKey));
             BatchGetTracesResponse resp = await xray.BatchGetTracesAsync(req);
-
+            
             //serialize segements into a json array, to avoid additional (de)serialization overhead
             StringBuilder sb = new StringBuilder();
             sb.Append('[');
@@ -109,7 +109,7 @@ namespace XRayConnector
         {
             var reqObj = new BatchGetTracesRequest()
             {
-                TraceIds = new List<string>(req.TraceIds),
+                TraceIds = new List<string>(req.TraceIds), 
                 NextToken = req.NextToken
             };
 
@@ -150,8 +150,7 @@ namespace XRayConnector
                     throw new Exception("Couldn't send span " + (res.StatusCode));
                 }
 
-            }
-            catch (Exception e)
+            }catch (Exception e)
             {
                 log.LogError(e, "Couldn't process tracedetails");
 
@@ -254,7 +253,7 @@ namespace XRayConnector
         {
             log.LogInformation("TriggerPeriodicAPIPoller");
 
-            string instanceId = PeriodicAPIPollerSingletoninstanceId;
+            string instanceId = PeriodicAPIPollerSingletoninstanceId; 
 
             try
             {
@@ -272,12 +271,12 @@ namespace XRayConnector
             {
                 return client.CreateCheckStatusResponse(req, instanceId);
             }
-            catch (Exception ex)
+            catch(Exception ex) 
             {
                 //CreateCheckStatusResponse doesn't work when deployed on K8s, as it cannot resovle the webhook from the env-var
                 //https://github.com/Azure/azure-functions-host/issues/9024
-                log.LogWarning("Unable to execute 'CreateCheckStatusResponse': " + ex.Message);
-
+                log.LogWarning("Unable to execute 'CreateCheckStatusResponse': "+ex.Message);
+                    
                 var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
                 res.Content = new StringContent("{status:\"OK\"}", null, "application/json");
 
@@ -288,7 +287,7 @@ namespace XRayConnector
 
         [FunctionName(nameof(PeriodicAPIPoller))]
         public static async Task PeriodicAPIPoller(
-            [OrchestrationTrigger] IDurableOrchestrationContext context,
+            [OrchestrationTrigger] IDurableOrchestrationContext context, 
             ILogger log)
         {
             uint PollingIntervalMinutes = 3;
@@ -304,7 +303,7 @@ namespace XRayConnector
             {
                 await context.CallSubOrchestratorAsync(nameof(RetrieveRecentTraces), PollingIntervalMinutes);
             }
-
+            
             // sleep for x minutes before next poll
             DateTime nextCleanup = context.CurrentUtcDateTime.AddMinutes(PollingIntervalMinutes);
             await context.CreateTimer(nextCleanup, CancellationToken.None);
@@ -328,7 +327,7 @@ namespace XRayConnector
                 res.Content = new StringContent("{status:\"Success\"}", null, "application/json");
                 return res;
             }
-            catch (Exception ex)
+            catch(Exception ex)
             {
                 log.LogError(ex, "Failed to terminate '" + PeriodicAPIPollerSingletoninstanceId + "'");
 
