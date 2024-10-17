@@ -50,6 +50,7 @@ Replace PLACEHOLDER with your password of choice to access the database.
 **Step 4)** Deploy mssql server and create the database
 ```
 kubectl apply -f ./mssql-secrets.yml
+kubectl create namespace mssql
 kubectl apply -f ./mssql-deployment.yml -n mssql
 
 # Once pod is ready...
@@ -58,7 +59,8 @@ $mssqlPod = kubectl get pods -n mssql -o jsonpath='{.items[0].metadata.name}'
 
 # Use sqlcmd.exe to create a database named "DurableDB". 
 # Replace 'PLACEHOLDER' with the password you used earlier
-kubectl exec -n mssql $mssqlPod -- /opt/mssql-tools18/bin/sqlcmd -S . -U sa -P "PLACEHOLDER" -Q "CREATE DATABASE [DurableDB] COLLATE Latin1_General_100_BIN2_UTF8"
+$mssqlPwd = "PLACEHOLDER"
+kubectl exec -n mssql $mssqlPod -- /opt/mssql-tools18/bin/sqlcmd -C -S . -U sa -P $mssqlPwd -Q "CREATE DATABASE [DurableDB] COLLATE Latin1_General_100_BIN2_UTF8"
 ```
 
 **Step 5)** Configure the polling & fowarding of X-Ray data in connector-config.yml
@@ -75,7 +77,8 @@ Replace the necessary placeholders with proper values providing AWS secrets, OTL
 kubectl apply -f .\connector-config.yml
 kubectl apply -f .\xrayconnector.yml
 
-#check deployment status 
+#check deployment status
+kubectl get pods
 kubectl rollout status deployment xrayconnector
 ```
 
