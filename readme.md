@@ -122,6 +122,7 @@ The service includes an endpoint ```/TestGenerateSampleTrace```, which sends a s
 ![Span setails](images/dynatrace-2.png)
 
 ## Release Notes
+* v0.10 Added support for role assumption via AWS STS. Added new config option to define polling interval in seconds.
 * v0.9 Added a new project XRayConnectorContainerized +  manifest for k8s deployment
 * v0.8 Add mapping for SQS, SNS, DynamoDB and Links
 * v0.6 Add mappings for ApiGateway and Lambda
