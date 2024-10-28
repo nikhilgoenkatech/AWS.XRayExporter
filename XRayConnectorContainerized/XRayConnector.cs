@@ -30,6 +30,8 @@ namespace XRayConnector
         private const string AWSRegionEndpoint = "AWS_RegionEndpoint";
         private const string AWSRoleArn = "AWS_RoleArn";
         private const string AWSRoleSessionDurationSeconds = "AWS_RoleSessionDurationSeconds";
+        private const string PollingIntervalSeconds = "PollingIntervalSeconds";
+        private const string PollingIntervalMinutes = "PollingIntervalMinutes"; 
 
         private const string AWSRoleSession = PeriodicAPIPollerSingletoninstanceId;
 
@@ -313,7 +315,7 @@ namespace XRayConnector
 
             var getTraces = new TracesRequest()
             {
-                StartTime = currentTime.AddMinutes(pollingInterval),
+                StartTime = currentTime.AddSeconds(pollingInterval),
                 EndTime = currentTime
             };
 
@@ -406,20 +408,27 @@ namespace XRayConnector
             [OrchestrationTrigger] IDurableOrchestrationContext context, 
             ILogger log)
         {
-            uint PollingIntervalMinutes;
-            if (!UInt32.TryParse(Environment.GetEnvironmentVariable("PollingIntervalMinutes"), out PollingIntervalMinutes))
+            uint pollingIntervalSeconds;
+            if (!UInt32.TryParse(Environment.GetEnvironmentVariable(PollingIntervalSeconds), out pollingIntervalSeconds))
             {
-                PollingIntervalMinutes = 3;
-                log.LogWarning("Unable to parse PollingIntervalMinutes, using default value");
+                if (UInt32.TryParse(Environment.GetEnvironmentVariable(PollingIntervalMinutes), out uint pollingIntervalMinutes))
+                {
+                    pollingIntervalSeconds = pollingIntervalMinutes * 60;
+                }
+                else
+                {
+                    pollingIntervalSeconds = 180;
+                    log.LogWarning("Unable to parse PollingIntervalSeconds, using default value (180sec)");
+                }
             }
 
-            log.LogInformation("PeriodicAPIPoller @" + PollingIntervalMinutes + "m");
+            log.LogInformation("PeriodicAPIPoller @" + pollingIntervalSeconds + "s");
 
             var identityKey = Environment.GetEnvironmentVariable(AWSIdentityKey);
-            await context.CallSubOrchestratorAsync(nameof(RetrieveRecentTraces), PollingIntervalMinutes);
+            await context.CallSubOrchestratorAsync(nameof(RetrieveRecentTraces), pollingIntervalSeconds);
             
             // sleep for x minutes before next poll
-            DateTime nextCleanup = context.CurrentUtcDateTime.AddMinutes(PollingIntervalMinutes);
+            DateTime nextCleanup = context.CurrentUtcDateTime.AddSeconds(pollingIntervalSeconds);
             await context.CreateTimer(nextCleanup, CancellationToken.None);
 
             context.ContinueAsNew(null);

@@ -7,9 +7,9 @@
     "FUNCTIONS_WORKER_RUNTIME": "dotnet",
     "OTLP_HEADER_AUTHORIZATION": "<YOUR-OPTIONAL-OTLP-HEADER-AUTHORIZATION>",
     "OTLP_ENDPOINT": "<YOUR-OTLP-TARGET-ENDPOINT>",
-    "PollingIntervalMinutes": "5",
+    "PollingIntervalSeconds": "300",
     "AWS_RoleArn": "<YOUR-ROLE-ARN>",
-    "AWS_RegionEndpoint": "<YOUR-REGIONAL-ENDPOINT>",
+    "AWS_RegionEndpoint": "<YOUR-REGIONAL-ENDPOINT>"
     /* Provide credentials if not using role based access*/
     /*
     "AWS_IdentityKey": "<YOUR-AWS-IDENTITY-KEY>",
