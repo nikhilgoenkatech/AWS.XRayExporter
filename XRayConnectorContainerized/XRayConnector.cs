@@ -11,6 +11,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Amazon.Runtime;
+using Amazon.SecurityToken.Model;
+using Amazon.SecurityToken;
 using Amazon.XRay;
 using Amazon.XRay.Model;
 using Microsoft.Azure.WebJobs;
@@ -26,40 +28,152 @@ namespace XRayConnector
         private const string AWSIdentityKey = "AWS_IdentityKey";
         private const string AWSSecretKey = "AWS_SecretKey";
         private const string AWSRegionEndpoint = "AWS_RegionEndpoint";
+        private const string AWSRoleArn = "AWS_RoleArn";
+        private const string AWSRoleSessionDurationSeconds = "AWS_RoleSessionDurationSeconds";
 
-        private readonly AmazonXRayClient xray;
+        private const string AWSRoleSession = PeriodicAPIPollerSingletoninstanceId;
+
+        private readonly AmazonXRayClient _xrayClient;
         private readonly IHttpClientFactory _httpClientFactory;
+
+        private static SessionAWSCredentials _sessionCredentials;
+        private static DateTime _credentialsExpiration;
+
         public XRayConnector(IHttpClientFactory httpClientFactory)
         {
             _httpClientFactory = httpClientFactory;
-            xray = new AmazonXRayClient(
-                Environment.GetEnvironmentVariable(AWSIdentityKey),
-                Environment.GetEnvironmentVariable(AWSSecretKey),
-                Amazon.RegionEndpoint.GetBySystemName(Environment.GetEnvironmentVariable(AWSRegionEndpoint))
-                );
+            _xrayClient = InitializeXRayClient().GetAwaiter().GetResult();
         }
 
-        public async Task<TracesResult> GetTraces(GetTraceSummariesRequest req, ILogger log)
+        private async Task<AmazonXRayClient> InitializeXRayClient()
         {
-            var resp = await xray.GetTraceSummariesAsync(req);
+            // Check if AWSRoleArn is set; if not, skip AssumeRole
+            var roleArn = Environment.GetEnvironmentVariable(AWSRoleArn);
+            var regionEndpoint = Environment.GetEnvironmentVariable(AWSRegionEndpoint);
 
-            if (resp.TraceSummaries.Count > 0)
+
+            if (!string.IsNullOrEmpty(roleArn) && !string.IsNullOrEmpty(regionEndpoint))
             {
-                var traceIds = new List<string>(resp.TraceSummaries.Count);
-                foreach (var s in resp.TraceSummaries)
-                    traceIds.Add(s.Id);
+                try
+                {
+                    var sessionCredentials = await GetAWSCredentials();
 
-
-                var res = new TracesResult();
-                res.TraceIds = traceIds.Chunk(5); //provide result in a batch of 5 id's due to api limits: https://docs.aws.amazon.com/xray/latest/api/API_BatchGetTraces.html
-                res.NextToken = resp.NextToken;
-
-                return res;
+                    return new AmazonXRayClient(
+                        sessionCredentials, 
+                        Amazon.RegionEndpoint.GetBySystemName(regionEndpoint));
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException("An unexpected error occurred while initializing the X-Ray client with assume role.", ex);
+                }
             }
             else
-                return null;
-            
+            {
+                var identityKey = Environment.GetEnvironmentVariable(AWSIdentityKey);
+                var secretKey = Environment.GetEnvironmentVariable(AWSSecretKey);
+                if (!String.IsNullOrEmpty(identityKey) && !String.IsNullOrEmpty(secretKey))
+                {
+                    if (String.IsNullOrEmpty(regionEndpoint))
+                    {
+                        return new AmazonXRayClient(
+                            identityKey,
+                            secretKey,
+                            Amazon.RegionEndpoint.GetBySystemName(regionEndpoint));
+                    }
+                    else
+                    {
+                        return new AmazonXRayClient(
+                            identityKey,
+                            secretKey);
+                    }
+                }
+
+            }
+
+            return null;
         }
+
+        private static async Task<SessionAWSCredentials> GetAWSCredentials()
+        {
+            if (_sessionCredentials == null || DateTime.UtcNow >= _credentialsExpiration)
+            {
+                var stsClient = new AmazonSecurityTokenServiceClient();
+
+                int sessionDuration;
+                if (!Int32.TryParse(Environment.GetEnvironmentVariable(AWSRoleSessionDurationSeconds), out sessionDuration))
+                    sessionDuration = 3600;
+                else if (sessionDuration < 600)
+                    sessionDuration = 600;
+
+                var assumeRole = new AssumeRoleRequest
+                {
+                    RoleArn = Environment.GetEnvironmentVariable(AWSRoleArn),
+                    RoleSessionName = AWSRoleSession,
+                    DurationSeconds = sessionDuration
+                };
+
+                if (!String.IsNullOrEmpty(assumeRole.RoleArn))
+                {
+                    try
+                    {
+                        var assumeRoleResponse = await stsClient.AssumeRoleAsync(assumeRole);
+
+                        _sessionCredentials = new SessionAWSCredentials(
+                            assumeRoleResponse.Credentials.AccessKeyId,
+                            assumeRoleResponse.Credentials.SecretAccessKey,
+                            assumeRoleResponse.Credentials.SessionToken
+                        );
+
+                        // Set expiration time (5 minutes before actual expiration)
+                        _credentialsExpiration = DateTime.UtcNow.AddSeconds(assumeRoleResponse.Credentials.Expiration.Subtract(DateTime.UtcNow).TotalSeconds - 300);
+
+                    }
+                    catch (AmazonSecurityTokenServiceException ex)
+                    {
+                        throw new InvalidOperationException("Failed to assume role with AWS STS.", ex);
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        throw new InvalidOperationException("Invalid region endpoint or missing credentials.", ex);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException("An unexpected error occurred while initializing the X-Ray client.", ex);
+                    }
+                }
+            }
+
+            return _sessionCredentials;
+        }
+        public async Task<TracesResult> GetTraces(GetTraceSummariesRequest req, ILogger log)
+        {
+            if (_xrayClient != null)
+            {
+                var resp = await _xrayClient.GetTraceSummariesAsync(req);
+
+                if (resp.TraceSummaries.Count > 0)
+                {
+                    var traceIds = new List<string>(resp.TraceSummaries.Count);
+                    foreach (var s in resp.TraceSummaries)
+                        traceIds.Add(s.Id);
+
+
+                    var res = new TracesResult();
+                    res.TraceIds = traceIds.Chunk(5); //provide result in a batch of 5 id's due to api limits: https://docs.aws.amazon.com/xray/latest/api/API_BatchGetTraces.html
+                    res.NextToken = resp.NextToken;
+
+                    return res;
+                }
+                    
+            }
+            else
+            {
+                log.LogWarning("Skip XRay API polling - client not initialized");
+            }
+
+            return null;
+        }
+
 
         [FunctionName(nameof(GetRecentTraceIds))]
         public async Task<TracesResult> GetRecentTraceIds([ActivityTrigger] TracesRequest req, ILogger log)
@@ -78,7 +192,7 @@ namespace XRayConnector
 
         async Task<TraceDetailsResult> GetTraceDetails(BatchGetTracesRequest req, ILogger log)
         {
-            BatchGetTracesResponse resp = await xray.BatchGetTracesAsync(req);
+            BatchGetTracesResponse resp = await _xrayClient.BatchGetTracesAsync(req);
             
             //serialize segements into a json array, to avoid additional (de)serialization overhead
             StringBuilder sb = new StringBuilder();
@@ -199,7 +313,7 @@ namespace XRayConnector
 
             var getTraces = new TracesRequest()
             {
-                StartTime = currentTime.AddMinutes(-5),
+                StartTime = currentTime.AddMinutes(pollingInterval),
                 EndTime = currentTime
             };
 
@@ -292,19 +406,17 @@ namespace XRayConnector
             [OrchestrationTrigger] IDurableOrchestrationContext context, 
             ILogger log)
         {
-            uint PollingIntervalMinutes = 3;
+            uint PollingIntervalMinutes;
             if (!UInt32.TryParse(Environment.GetEnvironmentVariable("PollingIntervalMinutes"), out PollingIntervalMinutes))
+            {
+                PollingIntervalMinutes = 3;
                 log.LogWarning("Unable to parse PollingIntervalMinutes, using default value");
+            }
 
             log.LogInformation("PeriodicAPIPoller @" + PollingIntervalMinutes + "m");
 
             var identityKey = Environment.GetEnvironmentVariable(AWSIdentityKey);
-            if (String.IsNullOrEmpty(identityKey) || identityKey == "<YOUR-AWS-IDENTITY-KEY>")
-                log.LogWarning("Skip API polling - missing configuration!");
-            else
-            {
-                await context.CallSubOrchestratorAsync(nameof(RetrieveRecentTraces), PollingIntervalMinutes);
-            }
+            await context.CallSubOrchestratorAsync(nameof(RetrieveRecentTraces), PollingIntervalMinutes);
             
             // sleep for x minutes before next poll
             DateTime nextCleanup = context.CurrentUtcDateTime.AddMinutes(PollingIntervalMinutes);
@@ -417,7 +529,7 @@ namespace XRayConnector
                                                      
 
             seg.TraceSegmentDocuments.Add(updated);
-            var resp = await xray.PutTraceSegmentsAsync(seg);
+            var resp = await _xrayClient.PutTraceSegmentsAsync(seg);
             
             var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
             res.Content = new StringContent("{status:\"ok\"}", null, "application/json");
