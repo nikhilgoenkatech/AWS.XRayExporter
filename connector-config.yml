@@ -7,10 +7,12 @@ stringData:
   #REPLACE placeholders!
   OTLP_HEADER_AUTHORIZATION: "<YOUR-OPTIONAL-OTLP-HEADER-AUTHORIZATION>"
   OTLP_ENDPOINT: "<YOUR-OTLP-TARGET-ENDPOINT>"
-  AWS_IdentityKey: "<YOUR-AWS-IDENTITY-KEY>"
-  AWS_SecretKey: "<YOUR-AWS-SECRET-KEY>"
+  #Role based access
+  AWS_RoleArn: "<YOUR-ROLE-ARN>",
   # https://docs.aws.amazon.com/general/latest/gr/xray.html#xray_region
   # us-east-1, ap-southeast-2, etc.
   AWS_RegionEndpoint: "<YOUR-AWS-REGION>"
-  PollingIntervalMinutes: "2"  
-
+  #Provide credentials if not using role based access
+  #AWS_IdentityKey: "<YOUR-AWS-IDENTITY-KEY>"
+  #AWS_SecretKey: "<YOUR-AWS-SECRET-KEY>"
+  PollingIntervalSeconds: "300"  
