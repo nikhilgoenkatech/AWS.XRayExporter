@@ -35,7 +35,20 @@ namespace XRayConnector
 
         private const string AWSRoleSession = PeriodicAPIPollerSingletoninstanceId;
 
-        private readonly AmazonXRayClient _xrayClient;
+        private AmazonXRayClient _xrayClient = null;
+        private AmazonXRayClient XRayClient
+        {
+            get
+            {
+                if (_xrayClient == null || SessionCredentialsExpired())
+                {
+                    _xrayClient = InitializeXRayClient().GetAwaiter().GetResult();
+                }
+
+                return _xrayClient;
+            }
+        }
+
         private readonly IHttpClientFactory _httpClientFactory;
 
         private static SessionAWSCredentials _sessionCredentials;
@@ -44,15 +57,14 @@ namespace XRayConnector
         public XRayConnector(IHttpClientFactory httpClientFactory)
         {
             _httpClientFactory = httpClientFactory;
-            _xrayClient = InitializeXRayClient().GetAwaiter().GetResult();
         }
+
 
         private async Task<AmazonXRayClient> InitializeXRayClient()
         {
             // Check if AWSRoleArn is set; if not, skip AssumeRole
             var roleArn = Environment.GetEnvironmentVariable(AWSRoleArn);
             var regionEndpoint = Environment.GetEnvironmentVariable(AWSRegionEndpoint);
-
 
             if (!string.IsNullOrEmpty(roleArn) && !string.IsNullOrEmpty(regionEndpoint))
             {
@@ -95,9 +107,23 @@ namespace XRayConnector
             return null;
         }
 
+        private static bool SessionCredentialsExpired()
+        {
+            // Check if AWSRoleArn is set
+            var roleArn = Environment.GetEnvironmentVariable(AWSRoleArn);
+            var regionEndpoint = Environment.GetEnvironmentVariable(AWSRegionEndpoint);
+
+            if (!string.IsNullOrEmpty(roleArn) && !string.IsNullOrEmpty(regionEndpoint))
+            {
+                return _sessionCredentials == null || DateTime.UtcNow >= _credentialsExpiration;
+            }
+
+            return false;
+        }
+
         private static async Task<SessionAWSCredentials> GetAWSCredentials()
         {
-            if (_sessionCredentials == null || DateTime.UtcNow >= _credentialsExpiration)
+            if (SessionCredentialsExpired())
             {
                 var stsClient = new AmazonSecurityTokenServiceClient();
 
@@ -149,9 +175,9 @@ namespace XRayConnector
         }
         public async Task<TracesResult> GetTraces(GetTraceSummariesRequest req, ILogger log)
         {
-            if (_xrayClient != null)
+            if (XRayClient != null)
             {
-                var resp = await _xrayClient.GetTraceSummariesAsync(req);
+                var resp = await XRayClient.GetTraceSummariesAsync(req);
 
                 if (resp.TraceSummaries.Count > 0)
                 {
@@ -194,7 +220,7 @@ namespace XRayConnector
 
         async Task<TraceDetailsResult> GetTraceDetails(BatchGetTracesRequest req, ILogger log)
         {
-            BatchGetTracesResponse resp = await _xrayClient.BatchGetTracesAsync(req);
+            BatchGetTracesResponse resp = await XRayClient.BatchGetTracesAsync(req);
             
             //serialize segements into a json array, to avoid additional (de)serialization overhead
             StringBuilder sb = new StringBuilder();
@@ -538,7 +564,7 @@ namespace XRayConnector
                                                      
 
             seg.TraceSegmentDocuments.Add(updated);
-            var resp = await _xrayClient.PutTraceSegmentsAsync(seg);
+            var resp = await XRayClient.PutTraceSegmentsAsync(seg);
             
             var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
             res.Content = new StringContent("{status:\"ok\"}", null, "application/json");
