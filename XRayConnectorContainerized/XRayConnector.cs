@@ -87,7 +87,7 @@ namespace XRayConnector
                 var secretKey = Environment.GetEnvironmentVariable(AWSSecretKey);
                 if (!String.IsNullOrEmpty(identityKey) && !String.IsNullOrEmpty(secretKey))
                 {
-                    if (String.IsNullOrEmpty(regionEndpoint))
+                    if (!String.IsNullOrEmpty(regionEndpoint))
                     {
                         return new AmazonXRayClient(
                             identityKey,
