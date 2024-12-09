@@ -19,6 +19,8 @@ using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.DurableTask;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Hosting.Internal;
 
 namespace XRayConnector
 {
@@ -31,11 +33,35 @@ namespace XRayConnector
         private const string AWSRoleArn = "AWS_RoleArn";
         private const string AWSRoleSessionDurationSeconds = "AWS_RoleSessionDurationSeconds";
         private const string PollingIntervalSeconds = "PollingIntervalSeconds";
-        private const string PollingIntervalMinutes = "PollingIntervalMinutes"; 
+        private const string PollingIntervalMinutes = "PollingIntervalMinutes";
+        private const string AutoStart = "AutoStart";
+
+        private bool AutoStartWorkflow
+        {
+            get
+            {
+                string? autoStartValue = Environment.GetEnvironmentVariable(AutoStart);
+                return bool.TryParse(autoStartValue, out bool result) && result;
+            }
+        }
+
 
         private const string AWSRoleSession = PeriodicAPIPollerSingletoninstanceId;
 
-        private readonly AmazonXRayClient _xrayClient;
+        private AmazonXRayClient _xrayClient = null;
+        private AmazonXRayClient XRayClient
+        {
+            get
+            {
+                if (_xrayClient == null || SessionCredentialsExpired())
+                {
+                    _xrayClient = InitializeXRayClient().GetAwaiter().GetResult();
+                }
+
+                return _xrayClient;
+            }
+        }
+
         private readonly IHttpClientFactory _httpClientFactory;
 
         private static SessionAWSCredentials _sessionCredentials;
@@ -44,15 +70,14 @@ namespace XRayConnector
         public XRayConnector(IHttpClientFactory httpClientFactory)
         {
             _httpClientFactory = httpClientFactory;
-            _xrayClient = InitializeXRayClient().GetAwaiter().GetResult();
         }
+
 
         private async Task<AmazonXRayClient> InitializeXRayClient()
         {
             // Check if AWSRoleArn is set; if not, skip AssumeRole
             var roleArn = Environment.GetEnvironmentVariable(AWSRoleArn);
             var regionEndpoint = Environment.GetEnvironmentVariable(AWSRegionEndpoint);
-
 
             if (!string.IsNullOrEmpty(roleArn) && !string.IsNullOrEmpty(regionEndpoint))
             {
@@ -75,7 +100,7 @@ namespace XRayConnector
                 var secretKey = Environment.GetEnvironmentVariable(AWSSecretKey);
                 if (!String.IsNullOrEmpty(identityKey) && !String.IsNullOrEmpty(secretKey))
                 {
-                    if (String.IsNullOrEmpty(regionEndpoint))
+                    if (!String.IsNullOrEmpty(regionEndpoint))
                     {
                         return new AmazonXRayClient(
                             identityKey,
@@ -95,9 +120,23 @@ namespace XRayConnector
             return null;
         }
 
+        private static bool SessionCredentialsExpired()
+        {
+            // Check if AWSRoleArn is set
+            var roleArn = Environment.GetEnvironmentVariable(AWSRoleArn);
+            var regionEndpoint = Environment.GetEnvironmentVariable(AWSRegionEndpoint);
+
+            if (!string.IsNullOrEmpty(roleArn) && !string.IsNullOrEmpty(regionEndpoint))
+            {
+                return _sessionCredentials == null || DateTime.UtcNow >= _credentialsExpiration;
+            }
+
+            return false;
+        }
+
         private static async Task<SessionAWSCredentials> GetAWSCredentials()
         {
-            if (_sessionCredentials == null || DateTime.UtcNow >= _credentialsExpiration)
+            if (SessionCredentialsExpired())
             {
                 var stsClient = new AmazonSecurityTokenServiceClient();
 
@@ -149,9 +188,9 @@ namespace XRayConnector
         }
         public async Task<TracesResult> GetTraces(GetTraceSummariesRequest req, ILogger log)
         {
-            if (_xrayClient != null)
+            if (XRayClient != null)
             {
-                var resp = await _xrayClient.GetTraceSummariesAsync(req);
+                var resp = await XRayClient.GetTraceSummariesAsync(req);
 
                 if (resp.TraceSummaries.Count > 0)
                 {
@@ -194,7 +233,7 @@ namespace XRayConnector
 
         async Task<TraceDetailsResult> GetTraceDetails(BatchGetTracesRequest req, ILogger log)
         {
-            BatchGetTracesResponse resp = await _xrayClient.BatchGetTracesAsync(req);
+            BatchGetTracesResponse resp = await XRayClient.BatchGetTracesAsync(req);
             
             //serialize segements into a json array, to avoid additional (de)serialization overhead
             StringBuilder sb = new StringBuilder();
@@ -337,32 +376,52 @@ namespace XRayConnector
             }
         }
 
-        //Do not use timer triggered functions to avoid overlap issues: https://stackoverflow.com/a/62640692
-        //[FunctionName(nameof(ScheduledStart))]
-        //public async Task ScheduledStart([TimerTrigger("0 */5 * * * *")] TimerInfo myTimer, [DurableClient] IDurableOrchestrationClient starter, ILogger log)
-        //{
-        //    await Execute(starter, log);
-        //}
-        //async Task<string> Execute(IDurableOrchestrationClient starter, ILogger log)
-        //{
-        //    string instanceId = await starter.StartNewAsync(nameof(RetrieveRecentTraces), null);
-        //    log.LogInformation("Started orchestration with ID = '{instanceId}'.", instanceId);
-        //    return instanceId;
-        //}
-        //[FunctionName(nameof(TestStart))]
-        //public async Task<HttpResponseMessage> TestStart(
-        //[HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
-        //[DurableClient] IDurableOrchestrationClient starter,
-        //ILogger log)
-        //{
-        //    log.LogWarning("TestStart");
-        //    string instanceId = await Execute(starter, log);
-        //    return starter.CreateCheckStatusResponse(req, instanceId);
-        //}
-        //...
-        //..
-        //.
-        // Instead kick-off a timer...
+        [FunctionName(nameof(WorkflowWatchdog))]
+        public async Task<HttpResponseMessage> WorkflowWatchdog(
+            [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
+            [DurableClient] IDurableOrchestrationClient client,
+            ILogger log)
+        {
+            var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+            try
+            {
+                string instanceId = PeriodicAPIPollerSingletoninstanceId;
+
+                DurableOrchestrationStatus status = await client.GetStatusAsync(PeriodicAPIPollerSingletoninstanceId);
+
+                if (status == null)
+                {
+                    if (AutoStartWorkflow)
+                    {
+                        res.Content = new StringContent("{status:\"Ok\" workflowstatus:\"Starting\"}", null, "application/json");
+
+                        log.LogWarning($"PeriodicAPIPoller has not been started. Automatically starting.. ");
+                        await client.StartNewAsync(nameof(PeriodicAPIPoller), instanceId);
+                    }
+                    else
+                        res.Content = new StringContent("{status:\"Ok\" workflowstatus:\"NotStarted\"}", null, "application/json");
+
+                }
+                else 
+                {
+                    res.Content = new StringContent("{status=\"Ok\" workflowstatus:\""+status.RuntimeStatus.ToString()+"\"}", null, "application/json");
+                    log.LogWarning("PeriodicAPIPoller has been started prior! Status: '" + status.RuntimeStatus.ToString() + "'");
+                    if (AutoStartWorkflow && (status.RuntimeStatus == OrchestrationRuntimeStatus.Failed || status.RuntimeStatus == OrchestrationRuntimeStatus.Terminated))
+                    {
+                        log.LogWarning("Restarting PeriodicAPIPoller!");
+                        await client.RestartAsync(instanceId);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex.ToString());
+                res.Content = new StringContent("{status:\"Failed\" message:\""+ex.Message+"\"}", null, "application/json");
+            }
+
+            return res;
+        }
+
         [FunctionName(nameof(TriggerPeriodicAPIPoller))]
         public async Task<HttpResponseMessage> TriggerPeriodicAPIPoller(
             [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
@@ -375,13 +434,24 @@ namespace XRayConnector
 
             try
             {
-                await client.StartNewAsync(nameof(PeriodicAPIPoller), instanceId);
+                DurableOrchestrationStatus status = await client.GetStatusAsync(PeriodicAPIPollerSingletoninstanceId);
+                if (status == null)
+                    await client.StartNewAsync(nameof(PeriodicAPIPoller), instanceId);
+                else
+                {
+                    log.LogWarning("PeriodicAPIPoller has been started prior! Status: '"+ status.RuntimeStatus.ToString() + "'");
+                    if (status.RuntimeStatus == OrchestrationRuntimeStatus.Failed || status.RuntimeStatus == OrchestrationRuntimeStatus.Terminated)
+                    {
+                        log.LogWarning("Restarting PeriodicAPIPoller!");
+                        await client.RestartAsync(instanceId);
+                    }
+                }
             }
             catch (Exception ex)
             {
                 log.LogError(ex, "Unable to start 'PeriodicAPIPoller'");
 
-                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
                 res.Content = new StringContent("{status:\"Failed\"}", null, "application/json");
             }
 
@@ -434,10 +504,10 @@ namespace XRayConnector
             context.ContinueAsNew(null);
         }
 
-        //Due to a bug to get admin urls from CreateAndCheckResponse, add a dedicated function to terminate orchestration.
+        //Due to a issue to get admin urls from CreateAndCheckResponse, add a dedicated function to terminate orchestration.
         [FunctionName(nameof(TerminatePeriodicAPIPoller))]
         public async Task<HttpResponseMessage> TerminatePeriodicAPIPoller(
-        [HttpTrigger(AuthorizationLevel.Admin, "post")] HttpRequestMessage req,
+        [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
         [DurableClient] IDurableOrchestrationClient client, ILogger log)
         {
             try
@@ -462,7 +532,7 @@ namespace XRayConnector
 
         [FunctionName(nameof(TestPing))]
         public Task<HttpResponseMessage> TestPing(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
+            [HttpTrigger(AuthorizationLevel.Admin, "GET")] HttpRequestMessage req,
             ILogger log)
         {
             log.LogInformation(nameof(TestPing));
@@ -473,10 +543,7 @@ namespace XRayConnector
         }
 
 
-        #region Testing
-#if DEBUG
-
-
+#region Testing
         private decimal ToEpochSeconds(DateTime ts)
         {
             // Get epoch second as 32bit integer
@@ -518,7 +585,7 @@ namespace XRayConnector
 
         [FunctionName(nameof(TestGenerateSampleTrace))]
         public async Task<HttpResponseMessage> TestGenerateSampleTrace(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
+            [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
             ILogger log)
         {
             log.LogWarning(nameof(TestGenerateSampleTrace));
@@ -538,19 +605,27 @@ namespace XRayConnector
                                                      
 
             seg.TraceSegmentDocuments.Add(updated);
-            var resp = await _xrayClient.PutTraceSegmentsAsync(seg);
-            
-            var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
-            res.Content = new StringContent("{status:\"ok\"}", null, "application/json");
 
-            return res;
+            
+            try
+            {
+                var resp = await XRayClient?.PutTraceSegmentsAsync(seg);
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);    
+                res.Content = new StringContent("{status:\"ok\"}", null, "application/json");
+                return res;
+            }
+            catch (System.Exception)
+            {
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);    
+                res.Content = new StringContent("{status:\"failed\"}", null, "application/json");
+                return res;
+                
+            }
+
         }
 
-      
-
-      
-#endif
-        #endregion
+#endregion
 
     }
 }

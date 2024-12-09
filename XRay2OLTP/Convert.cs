@@ -31,7 +31,7 @@ namespace XRay2OTLP
 
 #if DEBUG
         internal bool _SimulateRealtime = false;
-        internal bool _SimulateTraceId = true;
+        internal bool _SimulateTraceId = false;
         internal int _SpanSequenceStep = 0;
 #endif
         public Convert(ILoggerFactory? loggerFactory)
