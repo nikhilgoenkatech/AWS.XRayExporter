@@ -14,13 +14,12 @@ The solution contains several projects:
 #### XRay2OTLP
 XRayOTLP is a library to convert AWS X-Ray segment documents into the OpenTelemetry format OTLP. 
 
-#### XRayConnector / XRayConnectorContainerized
+#### XRayConnector 
 XRayConnector implements the polling logic for the AWS X-Ray REST-Api: https://docs.aws.amazon.com/xray/latest/devguide/xray-api-gettingdata.html. The logic is implemented using [Azure Durable Function](https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-overview?tabs=in-process%2Cv3-model%2Cv1-model&pivots=csharp) framework, which abstracts away the complexity to manage a fault-tolerant and reliable polling mechanism as behind the scenes the framework manages state, checkpoints, and automatic restarts. 
 
 It can be deployed either on Azure Functions or as well in Kubernetes (K8s), which makes it suitable to be deployed directly in AWS. For more details on using Azure Durable Functions in Kubernetes see [here](https://microsoft.github.io/durabletask-mssql/#/kubernetes). 
 
-The default **polling interval** to retrieve recent traces is **3 minutes** but can be changed by configuration. 
-**The automatic polling needs to be started** (and stopped) via Http triggered functions (*TriggerPeriodicAPIPoller* and *TerminatePeriodicAPIPoller*). Both methods are protected with the the Admin-level authorization key.
+The default **polling interval** to retrieve recent traces is **5 minutes** but can be changed by configuration. The workflow itself needs to be startedvia a Http-request, but the deployment manifest includes a cronjob, which checks the workflow status every 3 minutes and starts it if necessary.
 
 The **supported OpenTelemetry protocol** is [OTLP/HTTP JSON format](https://opentelemetry.io/docs/reference/specification/protocol/otlp/#otlphttp)
 
@@ -31,13 +30,13 @@ If you want to implement a similar fault-tolerant REST Api-Poller using AWS serv
 ### Pre-Requisites
 For reading from the AWS X-Ray REST Api, [create an AWS access key](https://docs.aws.amazon.com/powershell/latest/userguide/pstools-appendix-sign-up.html) with a policy that includes at least following actions ```xray:BatchGetTraces``` and ```xray:GetTraceSummaries```.
 
-### Running in K8s (XRayConnectorContainerized)
+### Deploy to K8s 
 **Step 1)** Build the XRayConnector container and push it to your target repository
 ```
 # Replace '<YOUR-REPOSITORY>' with your target container registry
-docker build -t xrayconnectorcontainerized:latest -f ./xrayconnectorcontainerized/Dockerfile .
-docker tag xrayconnectorcontainerized:latest <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
-docker push <YOUR-REPOSITORY>/xrayconnectorcontainerized:latest
+docker build -t xrayconnector:latest -f ./xrayconnector/Dockerfile .
+docker tag xrayconnector:latest <YOUR-REPOSITORY>/xrayconnector:latest
+docker push <YOUR-REPOSITORY>/xrayconnector:latest
 ```
 **Step 2)** Make sure KEDA v2 is up and running
 
@@ -105,13 +104,13 @@ kubectl get pods
 kubectl rollout status deployment xrayconnector
 ```
 
-The xrayconnector.yml defines a cronjob that automatically calls the "/api/WorkflowWatchdog" which checks the status of the workflow. 
+The xrayconnector.yml includes a cronjob that automatically calls the "/api/WorkflowWatchdog" which checks the status of the workflow. 
 If the environment variable "AutoStart" (connector-config.yml) is set to "True", WorkflowWatchdog automatically starts the workflow as well as restarts it in case it is failed or terminated state. The cronjob is configured to run every 3 minutes. 
 
 
 ### API Functions
 
-See ```test.http``` which provides api requests to be run in VSCode via the [REST Client extension](https://marketplace.visualstudio.com/items?itemName=humao.rest-client).
+See ```test.http``` which provides api requests to be run in Visual Studio Code (VSCode) via the [REST Client extension](https://marketplace.visualstudio.com/items?itemName=humao.rest-client).
 
 #### Manually start the workflow
 If autostart is disabled, you need to automatically trigger the workflow.
@@ -147,6 +146,10 @@ Sends a sample trace into X-Ray. This feature requires additional actions grante
 ![Span setails](images/dynatrace-2.png)
 
 ## Release Notes
+* v1.0 Switch to K8s deployment as the default option. 
+
+  BREAKING CHANGES: 
+  * XRayConnector and XRayConnectorContainerized projects have been merged. To build the container image for K8s deployment, all references to *XRayConnectorContainerized* have been migrated to *XRayConnector*. Please also see the adapted instructions in **Deploy to K8s, Step 1**. 
 * v0.11 Add supoprt to automatically start the workflow
 * v0.10 Added support for role assumption via AWS STS. Added new config option to define polling interval in seconds.
 * v0.9 Added a new project XRayConnectorContainerized +  manifest for k8s deployment

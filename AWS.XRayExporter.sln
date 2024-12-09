@@ -13,9 +13,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "XRay2OLTP", "XRay2OLTP\XRay
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "XRayExporter.Test", "XRayExporter.Test\XRayExporter.Test.csproj", "{13851695-5BB8-4E90-AD52-A7AB9306530F}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "XRayConnector", "XRayConnector\XRayConnector.csproj", "{D33AD1A4-221A-49BE-B89D-D08B4E6C893B}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "XRayConnectorContainerized", "XRayConnectorContainerized\XRayConnectorContainerized.csproj", "{F66D7846-88D8-4AE5-BB90-6A6BF495AA5A}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "XRayConnector", "XRayConnector\XRayConnector.csproj", "{F66D7846-88D8-4AE5-BB90-6A6BF495AA5A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -31,10 +29,6 @@ Global
 		{13851695-5BB8-4E90-AD52-A7AB9306530F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{13851695-5BB8-4E90-AD52-A7AB9306530F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{13851695-5BB8-4E90-AD52-A7AB9306530F}.Release|Any CPU.Build.0 = Release|Any CPU
-		{D33AD1A4-221A-49BE-B89D-D08B4E6C893B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{D33AD1A4-221A-49BE-B89D-D08B4E6C893B}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{D33AD1A4-221A-49BE-B89D-D08B4E6C893B}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{D33AD1A4-221A-49BE-B89D-D08B4E6C893B}.Release|Any CPU.Build.0 = Release|Any CPU
 		{F66D7846-88D8-4AE5-BB90-6A6BF495AA5A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{F66D7846-88D8-4AE5-BB90-6A6BF495AA5A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F66D7846-88D8-4AE5-BB90-6A6BF495AA5A}.Release|Any CPU.ActiveCfg = Release|Any CPU

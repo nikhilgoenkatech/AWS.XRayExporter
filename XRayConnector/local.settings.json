@@ -2,11 +2,18 @@
   "IsEncrypted": false,
   "Values": {
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "AzureWebJobsSecretStorageType": "Files",
+    "SQLDB_Connection": "Server=localhost;Database=DurableDB;Trusted_Connection=True;",
     "FUNCTIONS_WORKER_RUNTIME": "dotnet",
     "OTLP_HEADER_AUTHORIZATION": "<YOUR-OPTIONAL-OTLP-HEADER-AUTHORIZATION>",
     "OTLP_ENDPOINT": "<YOUR-OTLP-TARGET-ENDPOINT>",
+    "PollingIntervalSeconds": "300",
+    "AWS_RoleArn": "<YOUR-ROLE-ARN>",
+    "AWS_RegionEndpoint": "<YOUR-REGIONAL-ENDPOINT>"
+    /* Provide credentials if not using role based access*/
+    /*
     "AWS_IdentityKey": "<YOUR-AWS-IDENTITY-KEY>",
-    "AWS_SecretKey": "<YOUR-AWS-SECRET-KEY>",
-    "PollingIntervalMinutes": "5"
+    "AWS_SecretKey": "<YOUR-AWS-SECRET-KEY>"
+    */
   }
 }

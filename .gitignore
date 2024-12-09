@@ -349,3 +349,4 @@ MigrationBackup/
 # Ionide (cross platform F# VS Code tools) working folder
 .ionide/
 /XRayConnector/local.settings.json
+XRayConnector/local.settings.json
