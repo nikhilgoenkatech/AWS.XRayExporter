@@ -11,12 +11,16 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Amazon.Runtime;
+using Amazon.SecurityToken.Model;
+using Amazon.SecurityToken;
 using Amazon.XRay;
 using Amazon.XRay.Model;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.DurableTask;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Hosting.Internal;
 
 namespace XRayConnector
 {
@@ -25,38 +29,192 @@ namespace XRayConnector
         private const string PeriodicAPIPollerSingletoninstanceId = "SinglePeriodicAPIPoller";
         private const string AWSIdentityKey = "AWS_IdentityKey";
         private const string AWSSecretKey = "AWS_SecretKey";
+        private const string AWSRegionEndpoint = "AWS_RegionEndpoint";
+        private const string AWSRoleArn = "AWS_RoleArn";
+        private const string AWSRoleSessionDurationSeconds = "AWS_RoleSessionDurationSeconds";
+        private const string PollingIntervalSeconds = "PollingIntervalSeconds";
+        private const string PollingIntervalMinutes = "PollingIntervalMinutes";
+        private const string AutoStart = "AutoStart";
 
+        private bool AutoStartWorkflow
+        {
+            get
+            {
+                string? autoStartValue = Environment.GetEnvironmentVariable(AutoStart);
+                return bool.TryParse(autoStartValue, out bool result) && result;
+            }
+        }
+
+
+        private const string AWSRoleSession = PeriodicAPIPollerSingletoninstanceId;
+
+        private AmazonXRayClient _xrayClient = null;
+        private AmazonXRayClient XRayClient
+        {
+            get
+            {
+                if (_xrayClient == null || SessionCredentialsExpired())
+                {
+                    _xrayClient = InitializeXRayClient().GetAwaiter().GetResult();
+                }
+
+                return _xrayClient;
+            }
+        }
 
         private readonly IHttpClientFactory _httpClientFactory;
+
+        private static SessionAWSCredentials _sessionCredentials;
+        private static DateTime _credentialsExpiration;
+
         public XRayConnector(IHttpClientFactory httpClientFactory)
         {
             _httpClientFactory = httpClientFactory;
         }
 
-        public async Task<TracesResult> GetTraces(GetTraceSummariesRequest req, ILogger log)
+
+        private async Task<AmazonXRayClient> InitializeXRayClient()
         {
+            // Check if AWSRoleArn is set; if not, skip AssumeRole
+            var roleArn = Environment.GetEnvironmentVariable(AWSRoleArn);
+            var regionEndpoint = Environment.GetEnvironmentVariable(AWSRegionEndpoint);
 
-            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable(AWSIdentityKey), Environment.GetEnvironmentVariable(AWSSecretKey));
-
-            var resp = await xray.GetTraceSummariesAsync(req);
-
-            if (resp.TraceSummaries.Count > 0)
+            if (!string.IsNullOrEmpty(roleArn) && !string.IsNullOrEmpty(regionEndpoint))
             {
-                var traceIds = new List<string>(resp.TraceSummaries.Count);
-                foreach (var s in resp.TraceSummaries)
-                    traceIds.Add(s.Id);
+                try
+                {
+                    var sessionCredentials = await GetAWSCredentials();
 
-
-                var res = new TracesResult();
-                res.TraceIds = traceIds.Chunk(5); //provide result in a batch of 5 id's due to api limits: https://docs.aws.amazon.com/xray/latest/api/API_BatchGetTraces.html
-                res.NextToken = resp.NextToken;
-
-                return res;
+                    return new AmazonXRayClient(
+                        sessionCredentials, 
+                        Amazon.RegionEndpoint.GetBySystemName(regionEndpoint));
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException("An unexpected error occurred while initializing the X-Ray client with assume role.", ex);
+                }
             }
             else
-                return null;
+            {
+                var identityKey = Environment.GetEnvironmentVariable(AWSIdentityKey);
+                var secretKey = Environment.GetEnvironmentVariable(AWSSecretKey);
+                if (!String.IsNullOrEmpty(identityKey) && !String.IsNullOrEmpty(secretKey))
+                {
+                    if (!String.IsNullOrEmpty(regionEndpoint))
+                    {
+                        return new AmazonXRayClient(
+                            identityKey,
+                            secretKey,
+                            Amazon.RegionEndpoint.GetBySystemName(regionEndpoint));
+                    }
+                    else
+                    {
+                        return new AmazonXRayClient(
+                            identityKey,
+                            secretKey);
+                    }
+                }
 
+            }
+
+            return null;
         }
+
+        private static bool SessionCredentialsExpired()
+        {
+            // Check if AWSRoleArn is set
+            var roleArn = Environment.GetEnvironmentVariable(AWSRoleArn);
+            var regionEndpoint = Environment.GetEnvironmentVariable(AWSRegionEndpoint);
+
+            if (!string.IsNullOrEmpty(roleArn) && !string.IsNullOrEmpty(regionEndpoint))
+            {
+                return _sessionCredentials == null || DateTime.UtcNow >= _credentialsExpiration;
+            }
+
+            return false;
+        }
+
+        private static async Task<SessionAWSCredentials> GetAWSCredentials()
+        {
+            if (SessionCredentialsExpired())
+            {
+                var stsClient = new AmazonSecurityTokenServiceClient();
+
+                int sessionDuration;
+                if (!Int32.TryParse(Environment.GetEnvironmentVariable(AWSRoleSessionDurationSeconds), out sessionDuration))
+                    sessionDuration = 3600;
+                else if (sessionDuration < 600)
+                    sessionDuration = 600;
+
+                var assumeRole = new AssumeRoleRequest
+                {
+                    RoleArn = Environment.GetEnvironmentVariable(AWSRoleArn),
+                    RoleSessionName = AWSRoleSession,
+                    DurationSeconds = sessionDuration
+                };
+
+                if (!String.IsNullOrEmpty(assumeRole.RoleArn))
+                {
+                    try
+                    {
+                        var assumeRoleResponse = await stsClient.AssumeRoleAsync(assumeRole);
+
+                        _sessionCredentials = new SessionAWSCredentials(
+                            assumeRoleResponse.Credentials.AccessKeyId,
+                            assumeRoleResponse.Credentials.SecretAccessKey,
+                            assumeRoleResponse.Credentials.SessionToken
+                        );
+
+                        // Set expiration time (5 minutes before actual expiration)
+                        _credentialsExpiration = DateTime.UtcNow.AddSeconds(assumeRoleResponse.Credentials.Expiration.Subtract(DateTime.UtcNow).TotalSeconds - 300);
+
+                    }
+                    catch (AmazonSecurityTokenServiceException ex)
+                    {
+                        throw new InvalidOperationException("Failed to assume role with AWS STS.", ex);
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        throw new InvalidOperationException("Invalid region endpoint or missing credentials.", ex);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException("An unexpected error occurred while initializing the X-Ray client.", ex);
+                    }
+                }
+            }
+
+            return _sessionCredentials;
+        }
+        public async Task<TracesResult> GetTraces(GetTraceSummariesRequest req, ILogger log)
+        {
+            if (XRayClient != null)
+            {
+                var resp = await XRayClient.GetTraceSummariesAsync(req);
+
+                if (resp.TraceSummaries.Count > 0)
+                {
+                    var traceIds = new List<string>(resp.TraceSummaries.Count);
+                    foreach (var s in resp.TraceSummaries)
+                        traceIds.Add(s.Id);
+
+
+                    var res = new TracesResult();
+                    res.TraceIds = traceIds.Chunk(5); //provide result in a batch of 5 id's due to api limits: https://docs.aws.amazon.com/xray/latest/api/API_BatchGetTraces.html
+                    res.NextToken = resp.NextToken;
+
+                    return res;
+                }
+                    
+            }
+            else
+            {
+                log.LogWarning("Skip XRay API polling - client not initialized");
+            }
+
+            return null;
+        }
+
 
         [FunctionName(nameof(GetRecentTraceIds))]
         public async Task<TracesResult> GetRecentTraceIds([ActivityTrigger] TracesRequest req, ILogger log)
@@ -71,13 +229,12 @@ namespace XRayConnector
 
             return await GetTraces(reqObj, log);
         }
-
+      
 
         async Task<TraceDetailsResult> GetTraceDetails(BatchGetTracesRequest req, ILogger log)
         {
-            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable(AWSIdentityKey), Environment.GetEnvironmentVariable(AWSSecretKey));
-            BatchGetTracesResponse resp = await xray.BatchGetTracesAsync(req);
-
+            BatchGetTracesResponse resp = await XRayClient.BatchGetTracesAsync(req);
+            
             //serialize segements into a json array, to avoid additional (de)serialization overhead
             StringBuilder sb = new StringBuilder();
             sb.Append('[');
@@ -109,7 +266,7 @@ namespace XRayConnector
         {
             var reqObj = new BatchGetTracesRequest()
             {
-                TraceIds = new List<string>(req.TraceIds),
+                TraceIds = new List<string>(req.TraceIds), 
                 NextToken = req.NextToken
             };
 
@@ -150,8 +307,7 @@ namespace XRayConnector
                     throw new Exception("Couldn't send span " + (res.StatusCode));
                 }
 
-            }
-            catch (Exception e)
+            }catch (Exception e)
             {
                 log.LogError(e, "Couldn't process tracedetails");
 
@@ -198,7 +354,7 @@ namespace XRayConnector
 
             var getTraces = new TracesRequest()
             {
-                StartTime = currentTime.AddMinutes(-5),
+                StartTime = currentTime.AddSeconds(pollingInterval),
                 EndTime = currentTime
             };
 
@@ -220,32 +376,52 @@ namespace XRayConnector
             }
         }
 
-        //Do not use timer triggered functions to avoid overlap issues: https://stackoverflow.com/a/62640692
-        //[FunctionName(nameof(ScheduledStart))]
-        //public async Task ScheduledStart([TimerTrigger("0 */5 * * * *")] TimerInfo myTimer, [DurableClient] IDurableOrchestrationClient starter, ILogger log)
-        //{
-        //    await Execute(starter, log);
-        //}
-        //async Task<string> Execute(IDurableOrchestrationClient starter, ILogger log)
-        //{
-        //    string instanceId = await starter.StartNewAsync(nameof(RetrieveRecentTraces), null);
-        //    log.LogInformation("Started orchestration with ID = '{instanceId}'.", instanceId);
-        //    return instanceId;
-        //}
-        //[FunctionName(nameof(TestStart))]
-        //public async Task<HttpResponseMessage> TestStart(
-        //[HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
-        //[DurableClient] IDurableOrchestrationClient starter,
-        //ILogger log)
-        //{
-        //    log.LogWarning("TestStart");
-        //    string instanceId = await Execute(starter, log);
-        //    return starter.CreateCheckStatusResponse(req, instanceId);
-        //}
-        //...
-        //..
-        //.
-        // Instead kick-off a timer...
+        [FunctionName(nameof(WorkflowWatchdog))]
+        public async Task<HttpResponseMessage> WorkflowWatchdog(
+            [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
+            [DurableClient] IDurableOrchestrationClient client,
+            ILogger log)
+        {
+            var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+            try
+            {
+                string instanceId = PeriodicAPIPollerSingletoninstanceId;
+
+                DurableOrchestrationStatus status = await client.GetStatusAsync(PeriodicAPIPollerSingletoninstanceId);
+
+                if (status == null)
+                {
+                    if (AutoStartWorkflow)
+                    {
+                        res.Content = new StringContent("{status:\"Ok\" workflowstatus:\"Starting\"}", null, "application/json");
+
+                        log.LogWarning($"PeriodicAPIPoller has not been started. Automatically starting.. ");
+                        await client.StartNewAsync(nameof(PeriodicAPIPoller), instanceId);
+                    }
+                    else
+                        res.Content = new StringContent("{status:\"Ok\" workflowstatus:\"NotStarted\"}", null, "application/json");
+
+                }
+                else 
+                {
+                    res.Content = new StringContent("{status=\"Ok\" workflowstatus:\""+status.RuntimeStatus.ToString()+"\"}", null, "application/json");
+                    log.LogWarning("PeriodicAPIPoller has been started prior! Status: '" + status.RuntimeStatus.ToString() + "'");
+                    if (AutoStartWorkflow && (status.RuntimeStatus == OrchestrationRuntimeStatus.Failed || status.RuntimeStatus == OrchestrationRuntimeStatus.Terminated))
+                    {
+                        log.LogWarning("Restarting PeriodicAPIPoller!");
+                        await client.RestartAsync(instanceId);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex.ToString());
+                res.Content = new StringContent("{status:\"Failed\" message:\""+ex.Message+"\"}", null, "application/json");
+            }
+
+            return res;
+        }
+
         [FunctionName(nameof(TriggerPeriodicAPIPoller))]
         public async Task<HttpResponseMessage> TriggerPeriodicAPIPoller(
             [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
@@ -254,17 +430,28 @@ namespace XRayConnector
         {
             log.LogInformation("TriggerPeriodicAPIPoller");
 
-            string instanceId = PeriodicAPIPollerSingletoninstanceId;
+            string instanceId = PeriodicAPIPollerSingletoninstanceId; 
 
             try
             {
-                await client.StartNewAsync(nameof(PeriodicAPIPoller), instanceId);
+                DurableOrchestrationStatus status = await client.GetStatusAsync(PeriodicAPIPollerSingletoninstanceId);
+                if (status == null)
+                    await client.StartNewAsync(nameof(PeriodicAPIPoller), instanceId);
+                else
+                {
+                    log.LogWarning("PeriodicAPIPoller has been started prior! Status: '"+ status.RuntimeStatus.ToString() + "'");
+                    if (status.RuntimeStatus == OrchestrationRuntimeStatus.Failed || status.RuntimeStatus == OrchestrationRuntimeStatus.Terminated)
+                    {
+                        log.LogWarning("Restarting PeriodicAPIPoller!");
+                        await client.RestartAsync(instanceId);
+                    }
+                }
             }
             catch (Exception ex)
             {
                 log.LogError(ex, "Unable to start 'PeriodicAPIPoller'");
 
-                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
                 res.Content = new StringContent("{status:\"Failed\"}", null, "application/json");
             }
 
@@ -272,12 +459,12 @@ namespace XRayConnector
             {
                 return client.CreateCheckStatusResponse(req, instanceId);
             }
-            catch (Exception ex)
+            catch(Exception ex) 
             {
                 //CreateCheckStatusResponse doesn't work when deployed on K8s, as it cannot resovle the webhook from the env-var
                 //https://github.com/Azure/azure-functions-host/issues/9024
-                log.LogWarning("Unable to execute 'CreateCheckStatusResponse': " + ex.Message);
-
+                log.LogWarning("Unable to execute 'CreateCheckStatusResponse': "+ex.Message);
+                    
                 var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
                 res.Content = new StringContent("{status:\"OK\"}", null, "application/json");
 
@@ -288,34 +475,39 @@ namespace XRayConnector
 
         [FunctionName(nameof(PeriodicAPIPoller))]
         public static async Task PeriodicAPIPoller(
-            [OrchestrationTrigger] IDurableOrchestrationContext context,
+            [OrchestrationTrigger] IDurableOrchestrationContext context, 
             ILogger log)
         {
-            uint PollingIntervalMinutes = 3;
-            if (!UInt32.TryParse(Environment.GetEnvironmentVariable("PollingIntervalMinutes"), out PollingIntervalMinutes))
-                log.LogWarning("Unable to parse PollingIntervalMinutes, using default value");
-
-            log.LogInformation("PeriodicAPIPoller @" + PollingIntervalMinutes + "m");
-
-            var identityKey = Environment.GetEnvironmentVariable(AWSIdentityKey);
-            if (String.IsNullOrEmpty(identityKey) || identityKey == "<YOUR-AWS-IDENTITY-KEY>")
-                log.LogWarning("Skip API polling - missing configuration!");
-            else
+            uint pollingIntervalSeconds;
+            if (!UInt32.TryParse(Environment.GetEnvironmentVariable(PollingIntervalSeconds), out pollingIntervalSeconds))
             {
-                await context.CallSubOrchestratorAsync(nameof(RetrieveRecentTraces), PollingIntervalMinutes);
+                if (UInt32.TryParse(Environment.GetEnvironmentVariable(PollingIntervalMinutes), out uint pollingIntervalMinutes))
+                {
+                    pollingIntervalSeconds = pollingIntervalMinutes * 60;
+                }
+                else
+                {
+                    pollingIntervalSeconds = 180;
+                    log.LogWarning("Unable to parse PollingIntervalSeconds, using default value (180sec)");
+                }
             }
 
+            log.LogInformation("PeriodicAPIPoller @" + pollingIntervalSeconds + "s");
+
+            var identityKey = Environment.GetEnvironmentVariable(AWSIdentityKey);
+            await context.CallSubOrchestratorAsync(nameof(RetrieveRecentTraces), pollingIntervalSeconds);
+            
             // sleep for x minutes before next poll
-            DateTime nextCleanup = context.CurrentUtcDateTime.AddMinutes(PollingIntervalMinutes);
+            DateTime nextCleanup = context.CurrentUtcDateTime.AddSeconds(pollingIntervalSeconds);
             await context.CreateTimer(nextCleanup, CancellationToken.None);
 
             context.ContinueAsNew(null);
         }
 
-        //Due to a bug to get admin urls from CreateAndCheckResponse, add a dedicated function to terminate orchestration.
+        //Due to a issue to get admin urls from CreateAndCheckResponse, add a dedicated function to terminate orchestration.
         [FunctionName(nameof(TerminatePeriodicAPIPoller))]
         public async Task<HttpResponseMessage> TerminatePeriodicAPIPoller(
-        [HttpTrigger(AuthorizationLevel.Admin, "post")] HttpRequestMessage req,
+        [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
         [DurableClient] IDurableOrchestrationClient client, ILogger log)
         {
             try
@@ -328,7 +520,7 @@ namespace XRayConnector
                 res.Content = new StringContent("{status:\"Success\"}", null, "application/json");
                 return res;
             }
-            catch (Exception ex)
+            catch(Exception ex)
             {
                 log.LogError(ex, "Failed to terminate '" + PeriodicAPIPollerSingletoninstanceId + "'");
 
@@ -340,7 +532,7 @@ namespace XRayConnector
 
         [FunctionName(nameof(TestPing))]
         public Task<HttpResponseMessage> TestPing(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
+            [HttpTrigger(AuthorizationLevel.Admin, "GET")] HttpRequestMessage req,
             ILogger log)
         {
             log.LogInformation(nameof(TestPing));
@@ -351,10 +543,7 @@ namespace XRayConnector
         }
 
 
-        #region Testing
-#if DEBUG
-
-
+#region Testing
         private decimal ToEpochSeconds(DateTime ts)
         {
             // Get epoch second as 32bit integer
@@ -396,12 +585,11 @@ namespace XRayConnector
 
         [FunctionName(nameof(TestGenerateSampleTrace))]
         public async Task<HttpResponseMessage> TestGenerateSampleTrace(
-            [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestMessage req,
+            [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
             ILogger log)
         {
             log.LogWarning(nameof(TestGenerateSampleTrace));
 
-            var xray = new AmazonXRayClient(Environment.GetEnvironmentVariable(AWSIdentityKey), Environment.GetEnvironmentVariable(AWSSecretKey));
             PutTraceSegmentsRequest seg = new PutTraceSegmentsRequest();
             string rootSegment = "{\"id\":\"194fcc8747581230\",\"name\":\"Scorekeep\",\"start_time\":@S1,\"end_time\":@E1,\"http\":{\"request\":{\"url\":\"http://scorekeep.elasticbeanstalk.com/api/user\",\"method\":\"POST\",\"user_agent\":\"Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36\",\"client_ip\":\"205.251.233.183\"},\"response\":{\"status\":200}},\"aws\":{\"elastic_beanstalk\":{\"version_label\":\"app-abb9-170708_002045\",\"deployment_id\":406,\"environment_name\":\"scorekeep-dev\"},\"ec2\":{\"availability_zone\":\"us-west-2c\",\"instance_id\":\"i-0cd9e448944061b4a\"},\"xray\":{\"sdk_version\":\"1.1.2\",\"sdk\":\"X-Ray for Java\"}},\"service\":{},\"trace_id\":\"@TRACEID\",\"user\":\"5M388M1E\",\"origin\":\"AWS::ElasticBeanstalk::Environment\",\"subsegments\":[{\"id\":\"0c544c1b1bbff948\",\"name\":\"Lambda\",\"start_time\":@S1_1,\"end_time\":@E1_1,\"http\":{\"response\":{\"status\":200,\"content_length\":14}},\"aws\":{\"log_type\":\"None\",\"status_code\":200,\"function_name\":\"random-name\",\"invocation_type\":\"RequestResponse\",\"operation\":\"Invoke\",\"request_id\":\"ac086670-6373-11e7-a174-f31b3397f190\",\"resource_names\":[\"random-name\"]},\"namespace\":\"aws\"},{\"id\":\"071684f2e555e571\",\"name\":\"## UserModel.saveUser\",\"start_time\":@S1_1,\"end_time\":@E1_1,\"metadata\":{\"debug\":{\"test\":\"Metadata string from UserModel.saveUser\"}},\"subsegments\":[{\"id\":\"4cd3f10b76c624b4\",\"name\":\"DynamoDB\",\"start_time\":@S1_1_1,\"end_time\":@E1_1_1,\"http\":{\"response\":{\"status\":200,\"content_length\":57}},\"aws\":{\"table_name\":\"scorekeep-user\",\"operation\":\"UpdateItem\",\"request_id\":\"MFQ8CGJ3JTDDVVVASUAAJGQ6NJ82F738BOB4KQNSO5AEMVJF66Q9\",\"resource_names\":[\"scorekeep-user\"]},\"namespace\":\"aws\"}]}]}";
 
@@ -417,19 +605,27 @@ namespace XRayConnector
                                                      
 
             seg.TraceSegmentDocuments.Add(updated);
-            var resp = await xray.PutTraceSegmentsAsync(seg);
-            
-            var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
-            res.Content = new StringContent("{status:\"ok\"}", null, "application/json");
 
-            return res;
+            
+            try
+            {
+                var resp = await XRayClient?.PutTraceSegmentsAsync(seg);
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);    
+                res.Content = new StringContent("{status:\"ok\"}", null, "application/json");
+                return res;
+            }
+            catch (System.Exception)
+            {
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);    
+                res.Content = new StringContent("{status:\"failed\"}", null, "application/json");
+                return res;
+                
+            }
+
         }
 
-      
-
-      
-#endif
-        #endregion
+#endregion
 
     }
 }
