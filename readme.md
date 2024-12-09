@@ -65,14 +65,37 @@ kubectl exec -n mssql $mssqlPod -- /opt/mssql-tools18/bin/sqlcmd -C -S . -U sa -
 
 **Step 5)** Configure the polling & fowarding of X-Ray data in connector-config.yml
 
-Replace the necessary placeholders with proper values providing AWS secrets, OTLP endpoints, ..
+Replace the placeholders with proper values providing AWS secrets, OTLP endpoints, ..
+```
+...
+  # # # REPLACE placeholders!!! # # # 
+  # For Dynatrace provide the OTLP endpoint which may look like this: "https://<YOUR-TENANT-ID>.live.dynatrace.com/api/v2/otlp/v1/traces"
+  OTLP_ENDPOINT: "<YOUR-OTLP-TARGET-ENDPOINT>"
+  # For Dynatrace provide a API Token with OTLP Trace Ingest permissions in the following format "Api-Token <YOUR-DYNATRACE-API-TOKEN>"
+  OTLP_HEADER_AUTHORIZATION: "<YOUR-OPTIONAL-OTLP-HEADER-AUTHORIZATION>"
+  # Role based access
+  AWS_RoleArn: "<YOUR-ROLE-ARN>",
+  # https://docs.aws.amazon.com/general/latest/gr/xray.html#xray_region
+  # us-east-1, ap-southeast-2, etc.
+  AWS_RegionEndpoint: "<YOUR-AWS-REGION>"
+  # Provide credentials if not using role based access
+  #AWS_IdentityKey: "<YOUR-AWS-IDENTITY-KEY>"
+  #AWS_SecretKey: "<YOUR-AWS-SECRET-KEY>"
+  # Polling intervall for retrieving trace-summaries
+  PollingIntervalSeconds: "300"  
+  # If set to True the workflow is automatically started. 
+  AutoStart: "True"
+```
 
 **Step 6)** Configure the Function keys & registry in xrayconnector.yml
 
-* Replace all keys ( host.master, host.function.default, ..) with new ones, encoded in base64. 
-* Replace &lt;YOUR-REPOSITORY&gt; with the registry hosting your image
+* Replace all function keys ( host.master, host.function.default, ..), which protect your functions with new ones, encoded in base64. 
+    * Generate a new key with e.g. OpenSSL: ```oppenssl rand -base64 32```
+    * Base64 encode the returned key: ```echo -n '<THE NEW KEY>' | base64```
+* Replace the host.masterkey used in the xrayconnector-watchdog cronjob ```http://xrayconnector/api/WorkflowWatchdog?code=<REPLACE-WITH-THE-NEW-KEY>``` with the newly created key. 
+* Replace &lt;YOUR-REPOSITORY&gt; with the container registry, hosting your image
 
-**Step 7)** Deploy XRayConnector and config
+**Step 7)** Deploy config and XRayConnector
 ```
 kubectl apply -f .\connector-config.yml
 kubectl apply -f .\xrayconnector.yml
@@ -82,37 +105,39 @@ kubectl get pods
 kubectl rollout status deployment xrayconnector
 ```
 
-**Step 8)** Kick-off periodic API-Poller 
+The xrayconnector.yml defines a cronjob that automatically calls the "/api/WorkflowWatchdog" which checks the status of the workflow. 
+If the environment variable "AutoStart" (connector-config.yml) is set to "True", WorkflowWatchdog automatically starts the workflow as well as restarts it in case it is failed or terminated state. The cronjob is configured to run every 3 minutes. 
+
+
+### API Functions
+
+See ```test.http``` which provides api requests to be run in VSCode via the [REST Client extension](https://marketplace.visualstudio.com/items?itemName=humao.rest-client).
+
+#### Manually start the workflow
+If autostart is disabled, you need to automatically trigger the workflow.
 
 ```POST https://xxxx/api/TriggerPeriodicAPIPoller?code=<YOUR-FUNCTION-HOST-MASTER-KEY>```
 
-See also ```test.http``` to run the requests in VSCode via the [REST Client extension](https://marketplace.visualstudio.com/items?itemName=humao.rest-client).
+#### Terminate the workflow
+Manually stop the workflow. 
+
+```POST https://xxxx/api/TerminatePeriodicAPIPoller?code=<YOUR-FUNCTION-HOST-MASTER-KEY>```
+
+#### Check status of the workflow
+Checks the status of the workflow. If autostart is enabled, enforces a start of the workflow. 
+
+```POST https://xxxx/api/WorkflowWatchdog?code=<YOUR-FUNCTION-HOST-MASTER-KEY>```
 
 
-### Running locally as Azure Function (XRayConnector)
-For details how to run an Azure Function locally see [Code and test Azure Functions locally](https://learn.microsoft.com/en-us/azure/azure-functions/functions-develop-local).
+#### Test API 
+A simple http-request to see if the api is up & running
 
-*Note* The current project settings are targeting the windows platform. 
+```GET https://xxxx/api/TestPing?code=<YOUR-FUNCTION-HOST-MASTER-KEY>```
 
-Configure the AWS access key in your *local.settings.json* 
-```
-{
-    "IsEncrypted": false,
-    "Values": {
-        "AzureWebJobsStorage": "UseDevelopmentStorage=true",
-        "FUNCTIONS_WORKER_RUNTIME": "dotnet",
-        "OTLP_HEADER_AUTHORIZATION": "<YOUR-OPTIONAL-OTLP-HEADER-AUTHORIZATION>",
-        "OTLP_ENDPOINT": "<YOUR-OTLP-TARGET-ENDPOINT>",
-        "AWS_IdentityKey": "<YOUR-AWS-IDENTITY-KEY>",
-        "AWS_SecretKey": "<YOUR-AWS-SECRET-KEY>"
-    }
-}
+#### Ingest a sample trace into X-Ray for testing 
+Sends a sample trace into X-Ray. This feature requires additional actions granted in your AWS IAM policy: ```xray:PutTelemetryRecords``` and ```xray:PutTraceSegments```
 
-```
-and provide additional configuration required on your OTLP endpoint you want to send the traces to.
-
-### Sending a sample trace for testing (ONLY when compiled in DEBUG mode)
-The service includes an endpoint ```/TestGenerateSampleTrace```, which sends a sample trace into X-Ray. This feature requires additional actions granted in your AWS IAM policy: ```xray:PutTelemetryRecords``` and ```xray:PutTraceSegments```
+```POST https://xxxx/api/TestGenerateSampleTrace?code=<YOUR-FUNCTION-HOST-MASTER-KEY>``` 
 
 ### Original Trace in X-Ray
 ![X-Ray](images/x-ray.png)
@@ -122,6 +147,7 @@ The service includes an endpoint ```/TestGenerateSampleTrace```, which sends a s
 ![Span setails](images/dynatrace-2.png)
 
 ## Release Notes
+* v0.11 Add supoprt to automatically start the workflow
 * v0.10 Added support for role assumption via AWS STS. Added new config option to define polling interval in seconds.
 * v0.9 Added a new project XRayConnectorContainerized +  manifest for k8s deployment
 * v0.8 Add mapping for SQS, SNS, DynamoDB and Links

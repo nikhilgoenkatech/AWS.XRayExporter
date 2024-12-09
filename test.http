@@ -1,22 +1,32 @@
 
-### ### Local testing with kubernetes (e.g. minikube)
+### ### Local testing with kubernetes (e.g. minikube, Docker for Desktop)
 #### Test request
-GET http://localhost/api/TestPing
+GET http://localhost/api/TestPing?code=<YOUR-MASTER-KEY>
 
-#### Start workflow - w sample masterkey
+#### Start workflow 
 POST http://localhost/api/TriggerPeriodicAPIPoller?code=<YOUR-MASTER-KEY>
 
-#### Terminate workflow - sample masterkey
+#### Terminate workflow 
 POST http://localhost/api/TerminatePeriodicAPIPoller?code=<YOUR-MASTER-KEY>
 
+### Send test-trace to XRay
+POST http://localhost/api/TestGenerateSampleTrace?code=<YOUR-MASTER-KEY>
 
-### ### Local testing (non-k8s)
+### Check status of workflow
+POST http://localhost/api/WorkflowWatchdog?code=<YOUR-MASTER-KEY>
+
+### ### Local testing (Azure Function)
 #### Test request
 GET http://localhost:7217/api/TestPing 
 
 ### Start workflow
 POST http://localhost:7217/api/TriggerPeriodicAPIPoller 
 
-###
-### Terminate workfoow
+### Terminate workflow
 POST http://localhost:7217/api/TerminatePeriodicAPIPoller 
+
+### Send test-trace to XRay
+POST http://localhost:7217/api/TestGenerateSampleTrace
+
+### Check status of workflow
+POST http://localhost:7217/api/WorkflowWatchdog
