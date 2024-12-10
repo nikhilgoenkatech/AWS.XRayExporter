@@ -304,7 +304,7 @@ namespace XRayConnector
                 var res = await httpClient.PostAsync(otlpEndpoint, content);
                 if (!res.IsSuccessStatusCode)
                 {
-                    throw new Exception("Couldn't send span " + (res.StatusCode));
+                    throw new Exception("Couldn't send span. Status: " + (res.StatusCode));
                 }
 
             }catch (Exception e)
@@ -625,7 +625,70 @@ namespace XRayConnector
 
         }
 
-#endregion
 
-    }
+        [FunctionName(nameof(TestSendSampleTrace))]
+        public async Task<HttpResponseMessage> TestSendSampleTrace(
+            [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
+            ILogger log)
+        {
+            log.LogWarning(nameof(TestSendSampleTrace));
+            
+            string rootSegment = "[{\"id\":\"194fcc8747581230\",\"name\":\"Scorekeep\",\"start_time\":@S1,\"end_time\":@E1,\"http\":{\"request\":{\"url\":\"http://scorekeep.elasticbeanstalk.com/api/user\",\"method\":\"POST\",\"user_agent\":\"Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36\",\"client_ip\":\"205.251.233.183\"},\"response\":{\"status\":200}},\"aws\":{\"elastic_beanstalk\":{\"version_label\":\"app-abb9-170708_002045\",\"deployment_id\":406,\"environment_name\":\"scorekeep-dev\"},\"ec2\":{\"availability_zone\":\"us-west-2c\",\"instance_id\":\"i-0cd9e448944061b4a\"},\"xray\":{\"sdk_version\":\"1.1.2\",\"sdk\":\"X-Ray for Java\"}},\"service\":{},\"trace_id\":\"@TRACEID\",\"user\":\"5M388M1E\",\"origin\":\"AWS::ElasticBeanstalk::Environment\",\"subsegments\":[{\"id\":\"0c544c1b1bbff948\",\"name\":\"Lambda\",\"start_time\":@S1_1,\"end_time\":@E1_1,\"http\":{\"response\":{\"status\":200,\"content_length\":14}},\"aws\":{\"log_type\":\"None\",\"status_code\":200,\"function_name\":\"random-name\",\"invocation_type\":\"RequestResponse\",\"operation\":\"Invoke\",\"request_id\":\"ac086670-6373-11e7-a174-f31b3397f190\",\"resource_names\":[\"random-name\"]},\"namespace\":\"aws\"},{\"id\":\"071684f2e555e571\",\"name\":\"## UserModel.saveUser\",\"start_time\":@S1_1,\"end_time\":@E1_1,\"metadata\":{\"debug\":{\"test\":\"Metadata string from UserModel.saveUser\"}},\"subsegments\":[{\"id\":\"4cd3f10b76c624b4\",\"name\":\"DynamoDB\",\"start_time\":@S1_1_1,\"end_time\":@E1_1_1,\"http\":{\"response\":{\"status\":200,\"content_length\":57}},\"aws\":{\"table_name\":\"scorekeep-user\",\"operation\":\"UpdateItem\",\"request_id\":\"MFQ8CGJ3JTDDVVVASUAAJGQ6NJ82F738BOB4KQNSO5AEMVJF66Q9\",\"resource_names\":[\"scorekeep-user\"]},\"namespace\":\"aws\"}]}]}]";
+
+            var start = DateTime.UtcNow.Subtract(TimeSpan.FromSeconds(60));
+
+            var updated = rootSegment.Replace("@TRACEID", NewXrayTraceId())
+                                    .Replace("@S1_1_1", ToEpochSeconds(start.AddSeconds(1)).ToString().Replace(',', '.'))
+                                    .Replace("@E1_1_1", ToEpochSeconds(start.AddSeconds(3)).ToString().Replace(',', '.'))
+                                    .Replace("@S1_1", ToEpochSeconds(start.AddSeconds(1)).ToString().Replace(',', '.'))
+                                    .Replace("@E1_1", ToEpochSeconds(start.AddSeconds(2)).ToString().Replace(',', '.'))
+                                    .Replace("@S1", ToEpochSeconds(start).ToString().Replace(',', '.'))
+                                    .Replace("@E1", ToEpochSeconds(start.AddSeconds(3)).ToString().Replace(',', '.'));
+
+
+            try
+            {
+                var jsonDoc = JsonDocument.Parse(updated);
+
+                var conv = new XRay2OTLP.Convert(null);
+                var exportTraceServiceRequest = conv.FromXRaySegmentDocArray(jsonDoc);
+
+                var httpClient = _httpClientFactory.CreateClient("XRayConnector");
+
+                var authHeader = Environment.GetEnvironmentVariable("OTLP_HEADER_AUTHORIZATION");
+                if (!String.IsNullOrEmpty(authHeader))
+                    httpClient.DefaultRequestHeaders.Add("Authorization", authHeader);
+
+                var otlpEndpoint = Environment.GetEnvironmentVariable("OTLP_ENDPOINT");
+                if (!otlpEndpoint.Contains("v1/traces"))
+                    if (otlpEndpoint.EndsWith("/"))
+                        otlpEndpoint = otlpEndpoint += "v1/traces";
+                    else
+                        otlpEndpoint = otlpEndpoint += "/v1/traces";
+
+                var content = new XRay2OTLP.ExportRequestContent(exportTraceServiceRequest);
+
+                var resp = await httpClient.PostAsync(otlpEndpoint, content);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    throw new Exception("Couldn't send span. Status: " + (resp.StatusCode));
+                }
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+                res.Content = new StringContent("{status:\"ok\" message:\"Successfully sent span\"}", null, "application/json");
+                return res;
+            }
+            catch (System.Exception ex)
+            {
+                log.LogError(ex, "TestSendSampleTrace failed!");
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+                res.Content = new StringContent("{status:\"failed\" error:\""+ex.Message+"\"}", null, "application/json");
+                return res;
+            }
+        }
+
+            #endregion
+
+        }
 }
