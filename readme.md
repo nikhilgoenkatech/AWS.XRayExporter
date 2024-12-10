@@ -127,7 +127,6 @@ Checks the status of the workflow. If autostart is enabled, enforces a start of 
 
 ```POST https://xxxx/api/WorkflowWatchdog?code=<YOUR-FUNCTION-HOST-MASTER-KEY>```
 
-
 #### Test API 
 A simple http-request to see if the api is up & running
 
@@ -138,6 +137,12 @@ Sends a sample trace into X-Ray. This feature requires additional actions grante
 
 ```POST https://xxxx/api/TestGenerateSampleTrace?code=<YOUR-FUNCTION-HOST-MASTER-KEY>``` 
 
+#### Send a sample trace to the backend 
+Sends a sample trace to the configured OTLP endpoint to validate connection settings. 
+
+```POST https://xxxx/api/TestSendSampleTrace?code=<YOUR-FUNCTION-HOST-MASTER-KEY>``` 
+
+
 ### Original Trace in X-Ray
 ![X-Ray](images/x-ray.png)
 
@@ -146,11 +151,15 @@ Sends a sample trace into X-Ray. This feature requires additional actions grante
 ![Span setails](images/dynatrace-2.png)
 
 ## Release Notes
+* v1.1 Add *TestSendSampleTrace* api to validate OTLP connectivity
 * v1.0 Switch to K8s deployment as the default option. 
 
   BREAKING CHANGES: 
   * XRayConnector and XRayConnectorContainerized projects have been merged. To build the container image for K8s deployment, all references to *XRayConnectorContainerized* have been migrated to *XRayConnector*. Please also see the adapted instructions in **Deploy to K8s, Step 1**. 
 * v0.11 Add supoprt to automatically start the workflow
+
+  BREAKING CHANGES: 
+  * By default the workflow is now automatically started via a cronjob. Can be disabled via connector-config.yml, setting AutoStart to "False"
 * v0.10 Added support for role assumption via AWS STS. Added new config option to define polling interval in seconds.
 * v0.9 Added a new project XRayConnectorContainerized +  manifest for k8s deployment
 * v0.8 Add mapping for SQS, SNS, DynamoDB and Links

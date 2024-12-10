@@ -12,6 +12,9 @@ POST http://localhost/api/TerminatePeriodicAPIPoller?code=<YOUR-MASTER-KEY>
 ### Send test-trace to XRay
 POST http://localhost/api/TestGenerateSampleTrace?code=<YOUR-MASTER-KEY>
 
+### Send test-trace to configured backend
+POST http://localhost/api/TestSendSampleTrace?code=<YOUR-MASTER-KEY>
+
 ### Check status of workflow
 POST http://localhost/api/WorkflowWatchdog?code=<YOUR-MASTER-KEY>
 
@@ -27,6 +30,9 @@ POST http://localhost:7217/api/TerminatePeriodicAPIPoller
 
 ### Send test-trace to XRay
 POST http://localhost:7217/api/TestGenerateSampleTrace
+
+### Send test-trace to configured backend
+POST http://localhost:7217/api/TestSendSampleTrace
 
 ### Check status of workflow
 POST http://localhost:7217/api/WorkflowWatchdog
