@@ -4,7 +4,9 @@ metadata:
   name: connector-config
 type: Opaque
 stringData:
-  # # # REPLACE placeholders!!! # # # 
+  # # # REPLACE placeholders!!! # # #  
+  # Database connection string, replace the <YOUR-DATABASE-PASSWORD> with your actual password
+  SQLDB_Connection: "Server=mssqlinst.mssql.svc.cluster.local;Database=DurableDB;User ID=sa;Password=<YOUR-DATABASE-PASSWORD>;Persist Security Info=False;TrustServerCertificate=True;Encrypt=True;"
   # For Dynatrace provide the OTLP endpoint which may look like this: "https://<YOUR-TENANT-ID>.live.dynatrace.com/api/v2/otlp/v1/traces"
   OTLP_ENDPOINT: "<YOUR-OTLP-TARGET-ENDPOINT>"
   # For Dynatrace provide a API Token with OTLP Trace Ingest permissions in the following format "Api-Token <YOUR-DYNATRACE-API-TOKEN>"
