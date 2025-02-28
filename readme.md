@@ -156,6 +156,7 @@ Sends a sample trace to the configured OTLP endpoint to validate connection sett
 * v1.3 Improve resilience 
     * Operate mssql as a statefulset
     * Improved logging of XRayCLient issues
+    
   BREAKING CHANGES
     * New YAML files for the mssql database. See updated instructions.  
     * Merged mssql-secrets.yml into connector-config.yml. Requires update of the xrayconnector.yml
