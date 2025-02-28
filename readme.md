@@ -42,15 +42,15 @@ docker push <YOUR-REPOSITORY>/xrayconnector:latest
 
 For more details how to install KEDA, [see](https://keda.sh/docs/2.15/deploy/)
 
-**Step 3)** Configure database mssql-deployment.yml and mssql-secrets.yml
+**Step 3)** Configure database mssql-statefulset-secrets.yml
 
 Replace PLACEHOLDER with your password of choice to access the database.
 
 **Step 4)** Deploy mssql server and create the database
 ```
-kubectl apply -f ./mssql-secrets.yml
 kubectl create namespace mssql
-kubectl apply -f ./mssql-deployment.yml -n mssql
+kubectl apply -f ./mssql-statefulset-secrets.yml -n mssql
+kubectl apply -f ./mssql-statefulset.yml -n mssql
 
 # Once pod is ready...
 # ..get the name of the Pod running SQL Server
@@ -68,6 +68,8 @@ Replace the placeholders with proper values providing AWS secrets, OTLP endpoint
 ```
 ...
   # # # REPLACE placeholders!!! # # # 
+  # Database connection string, replace the <YOUR-DATABASE-PASSWORD> with your actual password as configured in mssql-statefulset-secrets.yml
+  SQLDB_Connection: "Server=mssqlinst.mssql.svc.cluster.local;Database=DurableDB;User ID=sa;Password=<YOUR-DATABASE-PASSWORD>;Persist Security Info=False;TrustServerCertificate=True;Encrypt=True;"
   # For Dynatrace provide the OTLP endpoint which may look like this: "https://<YOUR-TENANT-ID>.live.dynatrace.com/api/v2/otlp/v1/traces"
   OTLP_ENDPOINT: "<YOUR-OTLP-TARGET-ENDPOINT>"
   # For Dynatrace provide a API Token with OTLP Trace Ingest permissions in the following format "Api-Token <YOUR-DYNATRACE-API-TOKEN>"
@@ -88,10 +90,10 @@ Replace the placeholders with proper values providing AWS secrets, OTLP endpoint
 
 **Step 6)** Configure the Function keys & registry in xrayconnector.yml
 
-* Replace all function keys ( host.master, host.function.default, ..), which protect your functions with new ones, encoded in base64. 
+* (Recommended) Replace all function keys ( host.master, host.function.default, ..), which protect your functions with new ones, encoded in base64. 
     * Generate a new key with e.g. OpenSSL: ```oppenssl rand -base64 32```
     * Base64 encode the returned key: ```echo -n '<THE NEW KEY>' | base64```
-* Replace the host.masterkey used in the xrayconnector-watchdog cronjob ```http://xrayconnector/api/WorkflowWatchdog?code=<REPLACE-WITH-THE-NEW-KEY>``` with the newly created key. 
+* (Recommended) Replace the host.masterkey used in the xrayconnector-watchdog cronjob ```http://xrayconnector/api/WorkflowWatchdog?code=<REPLACE-WITH-THE-NEW-KEY>``` with the newly created key. 
 * Replace &lt;YOUR-REPOSITORY&gt; with the container registry, hosting your image
 
 **Step 7)** Deploy config and XRayConnector
@@ -151,6 +153,14 @@ Sends a sample trace to the configured OTLP endpoint to validate connection sett
 ![Span setails](images/dynatrace-2.png)
 
 ## Release Notes
+* v1.3 Improve resilience 
+    * Operate mssql as a statefulset
+    * Improved logging of XRayCLient issues
+  BREAKING CHANGES
+    * New YAML files for the mssql database. See updated instructions.  
+    * Merged mssql-secrets.yml into connector-config.yml. Requires update of the xrayconnector.yml
+* v1.2 Update attribute mapping 
+    * Incorporate xray segment error into span status 
 * v1.1 Add *TestSendSampleTrace* api to validate OTLP connectivity
 * v1.0 Switch to K8s deployment as the default option. 
 
