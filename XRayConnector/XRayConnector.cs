@@ -190,22 +190,37 @@ namespace XRayConnector
         {
             if (XRayClient != null)
             {
-                var resp = await XRayClient.GetTraceSummariesAsync(req);
-
-                if (resp.TraceSummaries.Count > 0)
+                try
                 {
-                    var traceIds = new List<string>(resp.TraceSummaries.Count);
-                    foreach (var s in resp.TraceSummaries)
-                        traceIds.Add(s.Id);
+                    var resp = await XRayClient.GetTraceSummariesAsync(req);
 
+                    log.LogInformation($"Traces retrieved: {resp.TraceSummaries.Count}");
+                    if (resp.TraceSummaries.Count > 0)
+                    {
+                        var traceIds = new List<string>(resp.TraceSummaries.Count);
+                        foreach (var s in resp.TraceSummaries)
+                            traceIds.Add(s.Id);
 
-                    var res = new TracesResult();
-                    res.TraceIds = traceIds.Chunk(5); //provide result in a batch of 5 id's due to api limits: https://docs.aws.amazon.com/xray/latest/api/API_BatchGetTraces.html
-                    res.NextToken = resp.NextToken;
+                        var res = new TracesResult();
+                        res.TraceIds = traceIds.Chunk(5); //provide result in a batch of 5 id's due to api limits: https://docs.aws.amazon.com/xray/latest/api/API_BatchGetTraces.html
+                        res.NextToken = resp.NextToken;
 
-                    return res;
+                        return res;
+                    }
+                } 
+                catch (ThrottledException ex)
+                {
+                    log.LogWarning($"Request throttled: {ex.Message}");
                 }
-                    
+                catch (AmazonServiceException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    log.LogWarning($"Too many requests (429): {ex.Message}");
+                }
+                catch (Exception ex)
+                {
+                    log.LogError(ex, "GetTraces failed");
+                }
+
             }
             else
             {
@@ -233,31 +248,49 @@ namespace XRayConnector
 
         async Task<TraceDetailsResult> GetTraceDetails(BatchGetTracesRequest req, ILogger log)
         {
-            BatchGetTracesResponse resp = await XRayClient.BatchGetTracesAsync(req);
-            
-            //serialize segements into a json array, to avoid additional (de)serialization overhead
-            StringBuilder sb = new StringBuilder();
-            sb.Append('[');
-            bool isFirst = true;
-            foreach (var t in resp.Traces)
+    
+            try
             {
-                foreach (var s in t.Segments)
+                BatchGetTracesResponse resp = await XRayClient.BatchGetTracesAsync(req);
+
+                //serialize segements into a json array, to avoid additional (de)serialization overhead
+                StringBuilder sb = new StringBuilder();
+                sb.Append('[');
+                bool isFirst = true;
+                foreach (var t in resp.Traces)
                 {
-                    if (!isFirst)
-                        sb.Append(',');
-                    sb.Append(s.Document);
-                    isFirst = false; ;
+                    foreach (var s in t.Segments)
+                    {
+                        if (!isFirst)
+                            sb.Append(',');
+                        sb.Append(s.Document);
+                        isFirst = false;
+                    }
                 }
+                sb.Append(']');
+
+                var res = new TraceDetailsResult
+                {
+                    Traces = sb.ToString(),
+                    NextToken = resp.NextToken
+                };
+
+                return res;
             }
-            sb.Append(']');
-
-            var res = new TraceDetailsResult
+            catch (ThrottledException ex)
             {
-                Traces = sb.ToString(),
-                NextToken = resp.NextToken
-            };
+                log.LogWarning($"Request throttled: {ex.Message}");
+            }
+            catch (AmazonServiceException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            {
+                log.LogWarning($"Too many requests (429): {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "GetTraceDetails failed");
+            }
 
-            return res;
+            return null;
         }
 
 
@@ -330,15 +363,23 @@ namespace XRayConnector
                         TraceIds = traceBatch
                     };
                     var traceDetails = await context.CallActivityAsync<TraceDetailsResult>(nameof(GetTraceDetails), getTraceDetails);
-                    await context.CallActivityAsync<bool>(nameof(ProcessTraces), traceDetails.Traces);
-
-                    string nextToken = traceDetails.NextToken;
-                    while (!String.IsNullOrEmpty(nextToken))
+                    if (traceDetails != null)
                     {
-                        getTraceDetails.NextToken = nextToken;
-                        traceDetails = await context.CallActivityAsync<TraceDetailsResult>(nameof(GetTraceDetails), getTraceDetails);
                         await context.CallActivityAsync<bool>(nameof(ProcessTraces), traceDetails.Traces);
-                        nextToken = traceDetails.NextToken;
+
+                        string nextToken = traceDetails.NextToken;
+                        while (!String.IsNullOrEmpty(nextToken))
+                        {
+                            getTraceDetails.NextToken = nextToken;
+                            traceDetails = await context.CallActivityAsync<TraceDetailsResult>(nameof(GetTraceDetails), getTraceDetails);
+                            if (traceDetails != null)
+                            {
+                                await context.CallActivityAsync<bool>(nameof(ProcessTraces), traceDetails.Traces);
+                                nextToken = traceDetails.NextToken;
+                            }
+                            else
+                                nextToken = null;
+                        }
                     }
                 }
             }
