@@ -14,6 +14,8 @@ namespace XRay
         public const string Start = "start_time";
         public const string End = "end_time";
         public const string InProgress = "in_progress";
+        public const string Error = "error";
+
 
         public const string Service = "service";
         public const string User = "user";

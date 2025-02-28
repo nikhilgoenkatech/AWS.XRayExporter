@@ -661,6 +661,10 @@ namespace XRay2OTLP
                 spanName = operationSpanName;
             }
 
+            if (BoolValue(segment, Attributes.Error)) 
+                span.Status = new Status() { Code = Status.Types.StatusCode.Error };
+
+
             AddSql(span, segment);
 
             if (String.IsNullOrEmpty(spanName))
