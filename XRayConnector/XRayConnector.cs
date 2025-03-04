@@ -21,6 +21,7 @@ using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Hosting.Internal;
+using DurableTask.Core;
 
 namespace XRayConnector
 {
@@ -564,6 +565,43 @@ namespace XRayConnector
             catch(Exception ex)
             {
                 log.LogError(ex, "Failed to terminate '" + PeriodicAPIPollerSingletoninstanceId + "'");
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
+                res.Content = new StringContent("{status:\"Failed\"}", null, "application/json");
+                return res;
+            }
+        }
+
+        //Due to a issue to get admin urls from CreateAndCheckResponse, add a dedicated function to purge the database.
+        [FunctionName(nameof(PurgeHistory))]
+        public async Task<HttpResponseMessage> PurgeHistory(
+        [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
+        [DurableClient] IDurableOrchestrationClient client, ILogger log)
+        {
+            try
+            {
+                string content = await req.Content.ReadAsStringAsync();
+                long olderThan;
+                if (!long.TryParse(content, out olderThan))
+                    olderThan = 60;
+
+                var purgeResult = await client.PurgeInstanceHistoryAsync(
+                    DateTime.MinValue,
+                    DateTime.UtcNow.AddMinutes(-1 * olderThan),
+                    new List<OrchestrationStatus>
+                    {
+                        OrchestrationStatus.Completed, OrchestrationStatus.Failed, OrchestrationStatus.Canceled
+                    });
+
+                log.LogInformation($"Purged history >{olderThan} minutes: {purgeResult.InstancesDeleted} instances deleted");
+
+                var res = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+                res.Content = new StringContent("{status:\"Success\"}", null, "application/json");
+                return res;
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Failed to purge history");
 
                 var res = new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
                 res.Content = new StringContent("{status:\"Failed\"}", null, "application/json");

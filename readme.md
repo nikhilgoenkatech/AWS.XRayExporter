@@ -91,7 +91,7 @@ Replace the placeholders with proper values providing AWS secrets, OTLP endpoint
 **Step 6)** Configure the Function keys & registry in xrayconnector.yml
 
 * (Recommended) Replace all function keys ( host.master, host.function.default, ..), which protect your functions with new ones, encoded in base64. 
-    * Generate a new key with e.g. OpenSSL: ```oppenssl rand -base64 32```
+    * Generate a new key with e.g. OpenSSL: ```openssl rand -base64 32```
     * Base64 encode the returned key: ```echo -n '<THE NEW KEY>' | base64```
 * (Recommended) Replace the host.masterkey used in the xrayconnector-watchdog cronjob ```http://xrayconnector/api/WorkflowWatchdog?code=<REPLACE-WITH-THE-NEW-KEY>``` with the newly created key. 
 * Replace &lt;YOUR-REPOSITORY&gt; with the container registry, hosting your image
@@ -108,7 +108,6 @@ kubectl rollout status deployment xrayconnector
 
 The xrayconnector.yml includes a cronjob that automatically calls the "/api/WorkflowWatchdog" which checks the status of the workflow. 
 If the environment variable "AutoStart" (connector-config.yml) is set to "True", WorkflowWatchdog automatically starts the workflow as well as restarts it in case it is failed or terminated state. The cronjob is configured to run every 3 minutes. 
-
 
 ### API Functions
 
@@ -128,6 +127,16 @@ Manually stop the workflow.
 Checks the status of the workflow. If autostart is enabled, enforces a start of the workflow. 
 
 ```POST https://xxxx/api/WorkflowWatchdog?code=<YOUR-FUNCTION-HOST-MASTER-KEY>```
+
+#### Purge workflow history
+Purges the workflow history for instances older than X minutes. Default is 1 day if not provided within content. 
+
+```
+POST https://xxxx/api/PurgeHistory?code=<YOUR-FUNCTION-HOST-MASTER-KEY>
+content-type: text/plain
+
+360
+```
 
 #### Test API 
 A simple http-request to see if the api is up & running
@@ -153,6 +162,7 @@ Sends a sample trace to the configured OTLP endpoint to validate connection sett
 ![Span setails](images/dynatrace-2.png)
 
 ## Release Notes
+* v1.4 Add new function endpoint and cronjob to purge database history
 * v1.3 Improve resilience 
     * Operate mssql as a statefulset
     * Improved logging of XRayCLient issues
