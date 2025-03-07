@@ -8,14 +8,13 @@ It enables an observability solution to analyze the trace telemetry directly cap
 ![X-Ray](images/x-ray.png)
 
 ### Trace exported into [Dynatrace](http://www.dynatrace.com)
-![Dynatrace](images/dynatrace-1.png)
-![Span setails](images/dynatrace-2.png)
+![Dynatrace](images/dynatrace.png)
 
 ### Trace correlation 
-As AWS X-Ray only supports its proprietary trace-context, a transaction which passes multiple tracing systems such as X-Ray and OpenTelemetry (using W3C-TraceContext), will generate separated traces. To follow such a transaction you need to correlate the traces by capturing the trace-context from the incoming different tracing system. This concept is also called *span-linking*. 
+As AWS X-Ray uses its proprietary trace-context, a transaction which passes multiple tracing systems such as X-Ray and OpenTelemetry (using W3C-TraceContext), will generate separated traces. To follow such a transaction you need to correlate the traces by capturing the trace-context from the incoming different tracing system. This concept is also called *span-linking*. 
 
 ### Logs in context of traces
-AWS services with X-Ray enabled contain the X-Ray trace id's within their log events. You can either look up the logs by the origin AWS X-Ray tracecontext, which is included as span attributes (```aws.xray.trace.id``` and ```aws.xray.segement.id```) or you transform the X-Ray TraceTontext on the log-events into the W3C TraceContext as used by the the conversion in XRay22OTLP. 
+AWS services with X-Ray enabled contain the X-Ray trace id's within their log events. You can either look up the logs by the origin AWS X-Ray tracecontext, which is included as span attributes (```aws.xray.trace.id``` and ```aws.xray.segement.id```) or you transform the X-Ray trace-context on the log-events into the W3C trace-context as used by the the conversion in XRay22OTLP. 
 
 Wheras the span-id is derived from the segment-id without any further modification, the trace-id is converted using the logic ```SUBSTR(REPLACE_STRING(traceId, "-", ""), 1))```
 
