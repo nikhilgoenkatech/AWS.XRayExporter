@@ -4,26 +4,60 @@ This project allows to read trace telemetry (segment documents) pulled from AWS 
 
 It enables an observability solution to analyze the trace telemetry directly captured via e.g. OpenTelemetry together with X-Ray instrumented AWS services. Especially for fully managed (serverless) services such as Amazon API Gateway, which ONLY [support tracing using X-Ray](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-enabling-xray.html), the integration of X-Ray gives much better insights and end-2-end visibility. 
 
-### What about trace correlation 
+### Original Trace in X-Ray
+![X-Ray](images/x-ray.png)
+
+### Trace exported into [Dynatrace](http://www.dynatrace.com)
+![Dynatrace](images/dynatrace-1.png)
+![Span setails](images/dynatrace-2.png)
+
+### Trace correlation 
 As AWS X-Ray only supports its proprietary trace-context, a transaction which passes multiple tracing systems such as X-Ray and OpenTelemetry (using W3C-TraceContext), will generate separated traces. To follow such a transaction you need to correlate the traces by capturing the trace-context from the incoming different tracing system. This concept is also called *span-linking*. 
+
+### Logs in context of traces
+AWS services with X-Ray enabled contain the X-Ray trace id's within their log events. You can either look up the logs by the origin AWS X-Ray tracecontext, which is included as span attributes (```aws.xray.trace.id``` and ```aws.xray.segement.id```) or you transform the X-Ray TraceTontext on the log-events into the W3C TraceContext as used by the the conversion in XRay22OTLP. 
+
+Wheras the span-id is derived from the segment-id without any further modification, the trace-id is converted using the logic ```SUBSTR(REPLACE_STRING(traceId, "-", ""), 1))```
+
+An example of such a a log processing rule using Dynatrace is
+```
+PARSE(content, "JSON{STRING:traceId}(flat=true)")
+| PARSE(content, "JSON{STRING:segmentId}(flat=true)")
+| FIELDS_ADD(dt.trace_id:SUBSTR(REPLACE_STRING(traceId, "-", ""), 1))
+| FIELDS_REMOVE(traceId)
+| FIELDS_RENAME(dt.span_id: segmentId)
+```
+for structured logs or  
+```
+PARSE(content, "DATA 'XRAY TraceId:' SPACE? STRING:TraceId DATA 'SegmentId:' SPACE? STRING:SegmentId")
+| FIELDS_ADD(TraceId,SegmentId)
+| FIELDS_ADD(dt.trace_id:SUBSTR(REPLACE_STRING(TraceId, "-", ""), 1))
+| FIELDS_REMOVE(TraceId)
+| FIELDS_RENAME(dt.span_id: SegmentId)
+```
+for unstructured logs. 
 
 ## How does it work?
 
-The solution contains several projects: 
+XRayConnector implements the workflow for polling from the [AWS X-Ray REST-Api](https://docs.aws.amazon.com/xray/latest/devguide/xray-api-gettingdata.html), does the data transformation and forwarding to an OpenTelemetry OTLP compatible endpoint. The data-transformation semantics converting from AWS X-Ray segment documents to OTLP is implemented in the XRay2OTLP library. 
 
-#### XRay2OTLP
-XRayOTLP is a library to convert AWS X-Ray segment documents into the OpenTelemetry format OTLP. 
-
-#### XRayConnector 
-XRayConnector implements the polling logic for the AWS X-Ray REST-Api: https://docs.aws.amazon.com/xray/latest/devguide/xray-api-gettingdata.html. The logic is implemented using [Azure Durable Function](https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-overview?tabs=in-process%2Cv3-model%2Cv1-model&pivots=csharp) framework, which abstracts away the complexity to manage a fault-tolerant and reliable polling mechanism as behind the scenes the framework manages state, checkpoints, and automatic restarts. 
-
-It can be deployed either on Azure Functions or as well in Kubernetes (K8s), which makes it suitable to be deployed directly in AWS. For more details on using Azure Durable Functions in Kubernetes see [here](https://microsoft.github.io/durabletask-mssql/#/kubernetes). 
-
-The default **polling interval** to retrieve recent traces is **5 minutes** but can be changed by configuration. The workflow itself needs to be startedvia a Http-request, but the deployment manifest includes a cronjob, which checks the workflow status every 3 minutes and starts it if necessary.
+XRayConnector provides a [REST Api](#rest-api) to manage the workflow.
 
 The **supported OpenTelemetry protocol** is [OTLP/HTTP JSON format](https://opentelemetry.io/docs/reference/specification/protocol/otlp/#otlphttp)
 
-If you want to implement a similar fault-tolerant REST Api-Poller using AWS serverless services, you can get started [here](https://github.com/aws-samples/sam-api-poller)
+### Scalability & Portability
+The workflow is implemented using [Durable Functions](https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-overview?tabs=in-process%2Cv3-model%2Cv1-model&pivots=csharp), which abstracts away the complexity to manage a fault-tolerant and reliable polling mechanism as behind the scenes the framework manages state, checkpoints, and automatic restarts.  
+
+Durable Functions are powered by the [Durable Task Framework (DTFx)](https://github.com/Azure/durabletask), which supports an extensible set of backend persistense stores. For this project the DurableTask.SqlServer extension is used to provide a cross-platform deployment using Kubernetes.
+
+ For more details about the architecture, scaling and operations using the SQLServer extension on K8s [read here](https://microsoft.github.io/durabletask-mssql/)
+
+ #### AWS X-Ray API-Limits
+ The AWS X-Ray REST Api is subject to throttling when the rate limit of 5 requests per second is reached. This limits the total number of traces beeing exported. The required number of requests for a number of traces can be estimated with the following formula:
+
+ ````(NumberOfTraces * (1 + 20*RoundUp(AvgNumberofServicesPerTrace/10)))/100````
+
+Throttled requests are logged to the console as Warnings. 
 
 ## Getting Started
 
@@ -31,6 +65,19 @@ If you want to implement a similar fault-tolerant REST Api-Poller using AWS serv
 For reading from the AWS X-Ray REST Api, [create an AWS access key](https://docs.aws.amazon.com/powershell/latest/userguide/pstools-appendix-sign-up.html) with a policy that includes at least following actions ```xray:BatchGetTraces``` and ```xray:GetTraceSummaries```.
 
 ### Deploy to K8s 
+
+#### Default configuration 
+The default configuration uses a **polling interval** of **5 minutes** to retrieve recent traces. 
+
+The XRayConnector pod is configured to use up to 5 workers, which should be sufficient to run the workflow in most scenarios, but it is recommended to test under load conditions. You should consider scaling out workers if your database tables ```dt.NevEvents``` or ```dt.NewTasks```start queuing up unprocessed events. 
+
+THe database is deployed using a stateful-set with 8Gib storage. As DTFx is based on the event-sourcing pattern, the database can grow very fast.
+
+It is recommended to regularly purge the history of executed workflow runs. **purgehistory.yml** covers a cronjob which calls the  [/api/PurgeHistory](#purge-workflow-history) **every day at 2am**. Depending on the number of traces to export and database scale configuration, you may choose a much higher purge frequency. 
+
+The xrayconnector.yml includes a watchdog-cronjob that automatically calls [/api/WorkflowWatchdog](#check-status-of-the-workflow) to check the status of the workflow **every 3 minutes**. 
+
+#### Step-by-Step Guide
 **Step 1)** Build the XRayConnector container and push it to your target repository
 ```
 # Replace '<YOUR-REPOSITORY>' with your target container registry
@@ -60,6 +107,10 @@ $mssqlPod = kubectl get pods -n mssql -o jsonpath='{.items[0].metadata.name}'
 # Replace 'PLACEHOLDER' with the password you used earlier
 $mssqlPwd = "PLACEHOLDER"
 kubectl exec -n mssql $mssqlPod -- /opt/mssql-tools18/bin/sqlcmd -C -S . -U sa -P $mssqlPwd -Q "CREATE DATABASE [DurableDB] COLLATE Latin1_General_100_BIN2_UTF8"
+
+# (Optionally)Deploy a cronjob to purge the history of executed workflow runs.
+# Prior configure the purgehistory.yml to your needs
+# kubectl -f ./purgehistory.yml
 ```
 
 **Step 5)** Configure the polling & fowarding of X-Ray data in connector-config.yml
@@ -84,11 +135,11 @@ Replace the placeholders with proper values providing AWS secrets, OTLP endpoint
   #AWS_SecretKey: "<YOUR-AWS-SECRET-KEY>"
   # Polling intervall for retrieving trace-summaries
   PollingIntervalSeconds: "300"  
-  # If set to True the workflow is automatically started. 
+  # If set to True the workflow is automatically started (or re-started in case it was terminated or failed) when the api/WorkflowWatchdog is called
   AutoStart: "True"
 ```
 
-**Step 6)** Configure the Function keys & registry in xrayconnector.yml
+**Step 6)** Configure the function keys & registry in xrayconnector.yml
 
 * (Recommended) Replace all function keys ( host.master, host.function.default, ..), which protect your functions with new ones, encoded in base64. 
     * Generate a new key with e.g. OpenSSL: ```openssl rand -base64 32```
@@ -106,15 +157,12 @@ kubectl get pods
 kubectl rollout status deployment xrayconnector
 ```
 
-The xrayconnector.yml includes a cronjob that automatically calls the "/api/WorkflowWatchdog" which checks the status of the workflow. 
-If the environment variable "AutoStart" (connector-config.yml) is set to "True", WorkflowWatchdog automatically starts the workflow as well as restarts it in case it is failed or terminated state. The cronjob is configured to run every 3 minutes. 
-
-### API Functions
+### REST Api
 
 See ```test.http``` which provides api requests to be run in Visual Studio Code (VSCode) via the [REST Client extension](https://marketplace.visualstudio.com/items?itemName=humao.rest-client).
 
 #### Manually start the workflow
-If autostart is disabled, you need to automatically trigger the workflow.
+If autostart is disabled, you need to automatically trigger the main workflow timer.
 
 ```POST https://xxxx/api/TriggerPeriodicAPIPoller?code=<YOUR-FUNCTION-HOST-MASTER-KEY>```
 
@@ -139,7 +187,7 @@ content-type: text/plain
 ```
 
 #### Test API 
-A simple http-request to see if the api is up & running
+A simple endpoint to see if the api is up & running
 
 ```GET https://xxxx/api/TestPing?code=<YOUR-FUNCTION-HOST-MASTER-KEY>```
 
@@ -154,12 +202,6 @@ Sends a sample trace to the configured OTLP endpoint to validate connection sett
 ```POST https://xxxx/api/TestSendSampleTrace?code=<YOUR-FUNCTION-HOST-MASTER-KEY>``` 
 
 
-### Original Trace in X-Ray
-![X-Ray](images/x-ray.png)
-
-### Trace exported into [Dynatrace](http://www.dynatrace.com)
-![Dynatrace](images/dynatrace-1.png)
-![Span setails](images/dynatrace-2.png)
 
 ## Release Notes
 * v1.4 Add new function endpoint and cronjob to purge database history
