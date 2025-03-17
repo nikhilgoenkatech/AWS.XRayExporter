@@ -203,6 +203,9 @@ Sends a sample trace to the configured OTLP endpoint to validate connection sett
 
 
 ## Release Notes
+* v1.5 Add a load-simulator for XRayApi. Fixed a bug that can cause the workflow to unintentionally run away causing repeated executions.  
+
+  **IMPORTANT NOTE:** PLEASE UPDATE FROM PREVIOUS VERSIONS TO AVOID ISSUES IN HIGH LOAD SCENARIOS
 * v1.4 Add new function endpoint and cronjob to purge database history
 * v1.3 Improve resilience 
     * Operate mssql as a statefulset
