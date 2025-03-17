@@ -22,6 +22,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Hosting.Internal;
 using DurableTask.Core;
+using AmazonSDKWrapper;
 
 namespace XRayConnector
 {
@@ -37,11 +38,27 @@ namespace XRayConnector
         private const string PollingIntervalMinutes = "PollingIntervalMinutes";
         private const string AutoStart = "AutoStart";
 
+#region Simulator 
+
+        enum TestSimulator
+        { 
+            Off, 
+            XRayApi
+        }
+        private TestSimulator SimulatorMode = TestSimulator.Off;
+
+        
+        private const string SimulatorModeCfg = "SimulatorMode";
+        private const string SimulatorTraceSummariesResponseCount = "SIM_TraceSummariesResponseCount";
+        private const string SimulatorTraceSummariesPageSize = "SIM_TraceSummariesPageSize";
+        
+        #endregion
+
         private bool AutoStartWorkflow
         {
             get
             {
-                string? autoStartValue = Environment.GetEnvironmentVariable(AutoStart);
+                var autoStartValue = Environment.GetEnvironmentVariable(AutoStart);
                 return bool.TryParse(autoStartValue, out bool result) && result;
             }
         }
@@ -49,14 +66,32 @@ namespace XRayConnector
 
         private const string AWSRoleSession = PeriodicAPIPollerSingletoninstanceId;
 
-        private AmazonXRayClient _xrayClient = null;
-        private AmazonXRayClient XRayClient
+        private IXRayClient _xrayClient = null;
+        private IXRayClient XRayClient
         {
             get
             {
-                if (_xrayClient == null || SessionCredentialsExpired())
+                if (SimulatorMode != TestSimulator.XRayApi)
                 {
-                    _xrayClient = InitializeXRayClient().GetAwaiter().GetResult();
+                    if (_xrayClient == null || SessionCredentialsExpired())
+                    {
+                        _xrayClient = new XRayClient(InitializeXRayClient().GetAwaiter().GetResult());
+                    }
+                }
+                else
+                {
+                    if (_xrayClient == null)
+                    {
+                        ushort simTraceCountPerSummariesRequest;
+                        byte simPageSize;
+                        if (!ushort.TryParse(Environment.GetEnvironmentVariable(SimulatorTraceSummariesResponseCount), out simTraceCountPerSummariesRequest))
+                            simTraceCountPerSummariesRequest = 10;
+                        
+                        if (!byte.TryParse(Environment.GetEnvironmentVariable(SimulatorTraceSummariesPageSize), out simPageSize))
+                            simPageSize = 2;
+
+                        _xrayClient = new XRayClientSimulator(simTraceCountPerSummariesRequest, simPageSize);
+                    }
                 }
 
                 return _xrayClient;
@@ -71,8 +106,9 @@ namespace XRayConnector
         public XRayConnector(IHttpClientFactory httpClientFactory)
         {
             _httpClientFactory = httpClientFactory;
-        }
 
+            SimulatorMode = Enum.TryParse(SimulatorMode.GetType(), Environment.GetEnvironmentVariable(SimulatorModeCfg), true, out object result) ? (TestSimulator)result : TestSimulator.Off;
+        }
 
         private async Task<AmazonXRayClient> InitializeXRayClient()
         {
@@ -315,33 +351,41 @@ namespace XRayConnector
             {
                 log.LogDebug(tracesJson);
 
-                var jsonDoc = JsonDocument.Parse(tracesJson);
-
-                var conv = new XRay2OTLP.Convert(null);
-                var exportTraceServiceRequest = conv.FromXRaySegmentDocArray(jsonDoc);
-
-                var httpClient = _httpClientFactory.CreateClient("XRayConnector");
-
-                var authHeader = Environment.GetEnvironmentVariable("OTLP_HEADER_AUTHORIZATION");
-                if (!String.IsNullOrEmpty(authHeader))
-                    httpClient.DefaultRequestHeaders.Add("Authorization", authHeader);
-
-                var otlpEndpoint = Environment.GetEnvironmentVariable("OTLP_ENDPOINT");
-                if (!otlpEndpoint.Contains("v1/traces"))
-                    if (otlpEndpoint.EndsWith("/"))
-                        otlpEndpoint = otlpEndpoint += "v1/traces";
-                    else
-                        otlpEndpoint = otlpEndpoint += "/v1/traces";
-
-                var content = new XRay2OTLP.ExportRequestContent(exportTraceServiceRequest);
-
-                var res = await httpClient.PostAsync(otlpEndpoint, content);
-                if (!res.IsSuccessStatusCode)
+                if (SimulatorMode == TestSimulator.Off)
                 {
-                    throw new Exception("Couldn't send span. Status: " + (res.StatusCode));
+                    var jsonDoc = JsonDocument.Parse(tracesJson);
+
+                    var conv = new XRay2OTLP.Convert(null);
+                    var exportTraceServiceRequest = conv.FromXRaySegmentDocArray(jsonDoc);
+
+                    var httpClient = _httpClientFactory.CreateClient("XRayConnector");
+
+                    var authHeader = Environment.GetEnvironmentVariable("OTLP_HEADER_AUTHORIZATION");
+                    if (!String.IsNullOrEmpty(authHeader))
+                        httpClient.DefaultRequestHeaders.Add("Authorization", authHeader);
+
+                    var otlpEndpoint = Environment.GetEnvironmentVariable("OTLP_ENDPOINT");
+                    if (!otlpEndpoint.Contains("v1/traces"))
+                        if (otlpEndpoint.EndsWith("/"))
+                            otlpEndpoint = otlpEndpoint += "v1/traces";
+                        else
+                            otlpEndpoint = otlpEndpoint += "/v1/traces";
+
+                    var content = new XRay2OTLP.ExportRequestContent(exportTraceServiceRequest);
+
+                    var res = await httpClient.PostAsync(otlpEndpoint, content);
+                    if (!res.IsSuccessStatusCode)
+                    {
+                        throw new Exception("Couldn't send span. Status: " + (res.StatusCode));
+                    }
+                }
+                else
+                {
+                    log.LogInformation("Demo mode: skipping OTLP export");
                 }
 
-            }catch (Exception e)
+            }
+            catch (Exception e)
             {
                 log.LogError(e, "Couldn't process tracedetails");
 
@@ -400,6 +444,7 @@ namespace XRayConnector
                 EndTime = currentTime
             };
 
+            
             var traces = await context.CallActivityAsync<TracesResult>(nameof(GetRecentTraceIds), getTraces);
             if (traces != null)
             {
@@ -412,7 +457,12 @@ namespace XRayConnector
                     var nextTraces = await context.CallActivityAsync<TracesResult>(nameof(GetRecentTraceIds), getTraces);
 
                     if (nextTraces != null)
+                    {
                         await context.CallSubOrchestratorAsync(nameof(RetrieveTraceDetails), nextTraces);
+                        nextTraceBatch = nextTraces.NextToken;
+                    }
+                    else
+                        nextTraceBatch = null;
 
                 }
             }
