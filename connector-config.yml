@@ -6,20 +6,20 @@ type: Opaque
 stringData:
   # # # REPLACE placeholders!!! # # #  
   # Database connection string, replace the <YOUR-DATABASE-PASSWORD> with your actual password
-  SQLDB_Connection: "Server=mssqlinst.mssql.svc.cluster.local;Database=DurableDB;User ID=sa;Password=<YOUR-DATABASE-PASSWORD>;Persist Security Info=False;TrustServerCertificate=True;Encrypt=True;"
+  SQLDB_Connection: "${SQLDB_Connection}" 
   # For Dynatrace provide the OTLP endpoint which may look like this: "https://<YOUR-TENANT-ID>.live.dynatrace.com/api/v2/otlp/v1/traces"
-  OTLP_ENDPOINT: "<YOUR-OTLP-TARGET-ENDPOINT>"
+  OTLP_ENDPOINT: "${OTLP_ENDPOINT}" 
   # For Dynatrace provide a API Token with OTLP Trace Ingest permissions in the following format "Api-Token <YOUR-DYNATRACE-API-TOKEN>"
-  OTLP_HEADER_AUTHORIZATION: "<YOUR-OPTIONAL-OTLP-HEADER-AUTHORIZATION>"
+  OTLP_HEADER_AUTHORIZATION: "${OTLP_HEADER_AUTHORIZATION}" 
   # Role based access
-  AWS_RoleArn: "<YOUR-ROLE-ARN>",
+  AWS_RoleArn: "${AWS_RoleArn}" 
   # https://docs.aws.amazon.com/general/latest/gr/xray.html#xray_region
   # us-east-1, ap-southeast-2, etc.
-  AWS_RegionEndpoint: "<YOUR-AWS-REGION>"
+  AWS_RegionEndpoint: "${AWS_RegionEndpoint}" 
   # Provide credentials if not using role based access
-  #AWS_IdentityKey: "<YOUR-AWS-IDENTITY-KEY>"
-  #AWS_SecretKey: "<YOUR-AWS-SECRET-KEY>"
+  AWS_IdentityKey: "${AWS_IdentityKey}"
+  AWS_SecretKey: "${AWS_SecretKey}"
   # Polling intervall for retrieving trace-summaries
-  PollingIntervalSeconds: "300"  
+  PollingIntervalSeconds: "${PollingIntervalSeconds}"
   # If set to True the workflow is automatically started. 
-  AutoStart: "True"
+  AutoStart:  "${AutoStart}" 
