@@ -68,7 +68,6 @@ for i in {0..2}; do
   aws ec2 associate-route-table --subnet-id ${PRIV_SUBNETS[$i]} --route-table-id $RT_ID --region $REGION
 done
 
-
 # Create EKS Cluster
 aws eks create-cluster   --name $CLUSTER_NAME   --region $REGION   --role-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/role-name   --resources-vpc-config subnetIds=$(IFS=,; echo "${PRIV_SUBNETS[*]}"),endpointPublicAccess=true   --kubernetes-version 1.32
 
@@ -90,6 +89,9 @@ aws eks create-nodegroup \
   --tags Name=eks-nodegroup
 
 # Add an add-on for ebs csi driver
-
-
-
+aws eks create-addon \
+  --cluster-name $CLUSTER_NAME \
+  --region $REGION \
+  --addon-name aws-ebs-csi-driver \
+  --service-account-role-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/$ROLE_NAME \
+  --resolve-conflicts OVERWRITE
