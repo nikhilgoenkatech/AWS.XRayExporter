@@ -69,7 +69,7 @@ for i in {0..2}; do
 done
 
 # Create EKS Cluster
-aws eks create-cluster   --name $CLUSTER_NAME   --region $REGION   --role-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/role-name   --resources-vpc-config subnetIds=$(IFS=,; echo "${PRIV_SUBNETS[*]}"),endpointPublicAccess=true   --kubernetes-version 1.32
+aws eks create-cluster   --name $CLUSTER_NAME   --region $REGION   --role-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/$ROLE_NAME   --resources-vpc-config subnetIds=$(IFS=,; echo "${PRIV_SUBNETS[*]}"),endpointPublicAccess=true   --kubernetes-version 1.32
 
 echo "Waiting for EKS cluster to become ACTIVE..."
 aws eks wait cluster-active --name $CLUSTER_NAME --region $REGION
