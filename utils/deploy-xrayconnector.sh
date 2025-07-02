@@ -1,8 +1,12 @@
-#!/bin/bash
+#!/bin/bash -x
 
 set -euo pipefail
 
+
+# Setting BASE_DIR to the root of the project (one level above this script) as config files are accessible at that location
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DRY_RUN=false
+
 if [[ "${1:-}" == "--dry-run" ]]; then
   DRY_RUN=true
   echo "Running in dry-run mode: no changes will be applied to the cluster."
@@ -86,25 +90,23 @@ if $DRY_RUN; then
   echo "Previewing mssql namespace manifest:"
   kubectl create namespace mssql --dry-run=client -o yaml | tee rendered-mssql-config.yaml
 else
-  run_cmd bash -c 'kubectl create namespace mssql --dry-run=client -o yaml | kubectl apply -f -'
+  kubectl create namespace mssql --dry-run=client -o yaml | run_cmd kubectl apply -f -
 fi
 
-run_cmd kubectl apply -f ./storageclass.yaml
-
+run_cmd kubectl apply -f "$BASE_DIR/storageclass.yaml"
 
 if $DRY_RUN; then
   echo "Previewing mssql-statefulset-secrets.yml:"
-  envsubst < ./mssql-statefulset-secrets.yml | tee rendered-mssql-statefulset-secrets.yml
+  envsubst < "$BASE_DIR/mssql-statefulset-secrets.yml" | tee rendered-mssql-statefulset-secrets.yml
 else
-
-  run_cmd bash -c 'envsubst < ./mssql-statefulset-secrets.yml | kubectl -n mssql apply -f -'
+  envsubst < "$BASE_DIR/mssql-statefulset-secrets.yml" | run_cmd kubectl -n mssql apply -f -
 fi
 
-#No change required in the file
+#Not applicable for dry-run
 if ! $DRY_RUN; then
-  run_cmd kubectl apply -f ./mssql-statefulset.yml -n mssql
+  run_cmd kubectl apply -f "$BASE_DIR/mssql-statefulset.yml" -n mssql
   run_cmd kubectl rollout status statefulset mssql -n mssql
-  run_cmd kubectl apply -f ./mssql-headless.yml
+  run_cmd kubectl apply -f "$BASE_DIR/mssql-headless.yml"
 fi
 
 if ! $DRY_RUN; then
@@ -115,16 +117,16 @@ fi
 
 if $DRY_RUN; then
   echo "Previewing connector-config.yml:"
-  envsubst < ./connector-config.yml | tee rendered-connector-config.yml
+  envsubst < "$BASE_DIR/connector-config.yml" | tee rendered-connector-config.yml
 else
-  run_cmd bash -c 'envsubst < ./connector-config.yml | kubectl apply -f -'
+  envsubst < "$BASE_DIR/connector-config.yml" | run_cmd kubectl apply -f -
 fi
 
 if $DRY_RUN; then
   echo "Previewing xrayconnector.yml:"
-  envsubst < ./xrayconnector.yml | tee rendered-xrayconnector.yml
+  envsubst < "$BASE_DIR/xrayconnector.yml" | tee rendered-xrayconnector.yml
 else
-  run_cmd bash -c 'envsubst < ./xrayconnector.yml | kubectl apply -f -'
+  run_cmd bash -c 'envsubst < "$BASE_DIR/xrayconnector.yml" | kubectl apply -f -'
   run_cmd kubectl rollout restart deployment xrayconnector
   run_cmd kubectl rollout status deployment xrayconnector
   run_cmd kubectl wait --for=condition=Ready pods --all -n mssql --timeout=180s
