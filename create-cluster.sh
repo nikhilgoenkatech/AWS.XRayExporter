@@ -7,6 +7,9 @@ CLUSTER_NAME="myekscluster" #rename as required
 VPC_CIDR="10.100.0.0/16"
 TAG="eks-vpc"
 KEY_NAME="MYKEY"  # replace it with any existing keys in the region 
+AWS_ACCOUNT_ID="account-id" #replace with account-id
+ROLE_NAME="role-name" #Replace with role policies - AmazonEKSWorkerNodePolicy, AmazonEC2ContainerRegistryReadOnly, AmazonEKS_CNI_Policy, AmazonEKSClusterPolicy 
+
 
 # Create VPC
 VPC_ID=$(aws ec2 create-vpc --cidr-block $VPC_CIDR --region $REGION --query "Vpc.VpcId" --output text)
@@ -67,7 +70,7 @@ done
 
 
 # Create EKS Cluster
-aws eks create-cluster   --name $CLUSTER_NAME   --region $REGION   --role-arn arn:aws:iam::account-id:role/role-name   --resources-vpc-config subnetIds=$(IFS=,; echo "${PRIV_SUBNETS[*]}"),endpointPublicAccess=true   --kubernetes-version 1.32
+aws eks create-cluster   --name $CLUSTER_NAME   --region $REGION   --role-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/role-name   --resources-vpc-config subnetIds=$(IFS=,; echo "${PRIV_SUBNETS[*]}"),endpointPublicAccess=true   --kubernetes-version 1.32
 
 echo "Waiting for EKS cluster to become ACTIVE..."
 aws eks wait cluster-active --name $CLUSTER_NAME --region $REGION
@@ -77,7 +80,7 @@ aws eks create-nodegroup \
   --cluster-name "$CLUSTER_NAME" \
   --region "$REGION" \
   --nodegroup-name linux-nodes \
-  --node-role arn:aws:iam::account-id:role/role-name \
+  --node-role arn:aws:iam::$AWS_ACCOUNT_ID:role/$ROLE_NAME \
   --subnets "$(printf '["%s"]' "$(IFS=','; echo "${PRIV_SUBNETS[*]}")" | sed 's/,/","/g')" \
   --scaling-config minSize=1,maxSize=3,desiredSize=2 \
   --disk-size 20 \
@@ -85,3 +88,8 @@ aws eks create-nodegroup \
   --ami-type AL2_x86_64 \
   --remote-access ec2SshKey="$KEY_NAME" \
   --tags Name=eks-nodegroup
+
+# Add an add-on for ebs csi driver
+
+
+
