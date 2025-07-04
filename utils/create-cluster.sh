@@ -2,14 +2,15 @@
 set -e
 
 # Configuration
-REGION="us-east-2"
-CLUSTER_NAME="myekscluster" #rename as required
+REGION="MYREGION"
+CLUSTER_NAME="myekscluster"
 VPC_CIDR="10.100.0.0/16"
 TAG="eks-vpc"
-KEY_NAME="MYKEY"  # replace it with any existing keys in the region 
-AWS_ACCOUNT_ID="account-id" #replace with account-id
-ROLE_NAME="role-name" #Replace with role policies - AmazonEKSWorkerNodePolicy, AmazonEC2ContainerRegistryReadOnly, AmazonEKS_CNI_Policy, AmazonEKSClusterPolicy 
-
+KEY_NAME="xx"
+AWS_ACCOUNT_ID="xxx"
+ROLE_NAME="xxx" # Replace with a role with policies AmazonEKSWorkerNodePolicy, AmazonEC2ContainerRegistryReadOnly, AmazonEKSClusterPolicy 
+NODE_ROLE_NAME="xxx" # Replace with a role with policies AmazonEKSWorkerNodePolicy, AmazonEC2ContainerRegistryReadOnly, AmazonEKS_CNI_Policy
+EBS_ROLE_NAME="xx"
 
 # Create VPC
 VPC_ID=$(aws ec2 create-vpc --cidr-block $VPC_CIDR --region $REGION --query "Vpc.VpcId" --output text)
@@ -47,9 +48,9 @@ for SUBNET_ID in "${PUB_SUBNETS[@]}"; do
 done
 
 # Allocate available Elastic IP
-EIP_ALLOC_ID=$(aws ec2 describe-addresses --query "Addresses[?AssociationId==null].[PublicIp,AllocationId]" --output text | awk '{print $2}')
+EIP_ALLOC_ID=$(aws ec2 describe-addresses --query "Addresses[?AssociationId==null].[AllocationId]" --output text | head -n1)
 
-# Create a single NAT Gateway in the first public subnet
+# Create NAT Gateway
 NAT_GW_ID=$(aws ec2 create-nat-gateway \
   --subnet-id ${PUB_SUBNETS[0]} \
   --allocation-id $EIP_ALLOC_ID \
@@ -57,11 +58,10 @@ NAT_GW_ID=$(aws ec2 create-nat-gateway \
   --query "NatGateway.NatGatewayId" \
   --output text)
 
-# Wait for NAT Gateway to become available
 echo "Waiting for NAT Gateway to become available..."
 aws ec2 wait nat-gateway-available --nat-gateway-ids $NAT_GW_ID --region $REGION
 
-# Create route tables for private subnets and associate them with the single NAT Gateway
+# Create route tables for private subnets
 for i in {0..2}; do
   RT_ID=$(aws ec2 create-route-table --vpc-id $VPC_ID --region $REGION --query "RouteTable.RouteTableId" --output text)
   aws ec2 create-route --route-table-id $RT_ID --destination-cidr-block 0.0.0.0/0 --nat-gateway-id $NAT_GW_ID --region $REGION
@@ -69,7 +69,12 @@ for i in {0..2}; do
 done
 
 # Create EKS Cluster
-aws eks create-cluster   --name $CLUSTER_NAME   --region $REGION   --role-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/$ROLE_NAME   --resources-vpc-config subnetIds=$(IFS=,; echo "${PRIV_SUBNETS[*]}"),endpointPublicAccess=true   --kubernetes-version 1.32
+aws eks create-cluster \
+  --name $CLUSTER_NAME \
+  --region $REGION \
+  --role-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/$ROLE_NAME \
+  --resources-vpc-config subnetIds=$(IFS=,; echo "${PRIV_SUBNETS[*]}"),endpointPublicAccess=true \
+  --kubernetes-version 1.32
 
 echo "Waiting for EKS cluster to become ACTIVE..."
 aws eks wait cluster-active --name $CLUSTER_NAME --region $REGION
@@ -79,7 +84,7 @@ aws eks create-nodegroup \
   --cluster-name "$CLUSTER_NAME" \
   --region "$REGION" \
   --nodegroup-name linux-nodes \
-  --node-role arn:aws:iam::$AWS_ACCOUNT_ID:role/$ROLE_NAME \
+  --node-role arn:aws:iam::$AWS_ACCOUNT_ID:role/$NODE_ROLE_NAME \
   --subnets "$(printf '["%s"]' "$(IFS=','; echo "${PRIV_SUBNETS[*]}")" | sed 's/,/","/g')" \
   --scaling-config minSize=1,maxSize=3,desiredSize=2 \
   --disk-size 20 \
@@ -87,11 +92,3 @@ aws eks create-nodegroup \
   --ami-type AL2_x86_64 \
   --remote-access ec2SshKey="$KEY_NAME" \
   --tags Name=eks-nodegroup
-
-# Add an add-on for ebs csi driver
-aws eks create-addon \
-  --cluster-name $CLUSTER_NAME \
-  --region $REGION \
-  --addon-name aws-ebs-csi-driver \
-  --service-account-role-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/$ROLE_NAME \
-  --resolve-conflicts OVERWRITE
