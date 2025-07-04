@@ -64,3 +64,11 @@ The script will:
 
 ---
 
+## What to expect
+After running the script, you’ll have:
+
+A fully functional EKS cluster named myekscluster
+A managed node group with 2 nodes deployed in private subnets
+A VPC with public and private subnets across 3 Availability Zones
+Internet and NAT gateways configured for outbound access
+
