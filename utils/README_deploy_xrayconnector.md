@@ -43,14 +43,44 @@ chmod 700 get_helm.sh
 ./get_helm.sh
 helm version
 ```
-### 4. Other pre-requisites  
+
+### 4. Install ekstcl  
+```bash
+curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" -o eksctl.tar.gz
+
+# Extract the tarball
+tar -xzf eksctl.tar.gz
+
+# Move the binary to a directory in your PATH
+sudo mv eksctl /usr/local/bin
+
+# Verify installation
+eksctl version
+```
+
+### 5. Other pre-requisites  
 - Access to a Kubernetes cluster with storage class support.
 - Optional: Docker and access to a container registry (if you build your own image).
 - Valid AWS IAM role or access/secret keys (if integrating with AWS).
-- OpenSSL for token generation.
+- OpenSSL for token generation.  
+---  
 
----
+## ➕ Add-ons: EBS CSI Driver  
+To enable dynamic volume provisioning (e.g., for MSSQL), install the AWS EBS CSI driver.  
+Install the EBS CSI Add-on
 
+```bash
+eksctl create addon \
+  --name aws-ebs-csi-driver \
+  --cluster CLUSTER_NAME \
+  --region REGION \
+  --service-account-role-arn arn:aws:iam::AWS_ACCOUNT_ID:role/AmazonEKS_EBS_CSI_DriverRole \
+  --force
+```
+🔁 Replace CLUSTER_NAME, REGION, and AWS_ACCOUNT_ID with your actual values.
+
+
+# Script & Execution  
 ## 🧪 Dry Run Mode
 
 You can test the script without applying changes:
@@ -144,3 +174,34 @@ A file named `xray-config.env` will be created with all the key environment vari
 | `PollingIntervalSeconds` | Interval in seconds for polling (default: 300) |
 | `AutoStart` | Whether to auto-start the connector (default: True) |
 | `WATCHDOG_BASE_KEY` | Randomly generated key for internal use | 
+
+## Troubleshooting tips  
+If you encounter errors like below:  
+```
+ProvisioningFailed: failed to provision volume with StorageClass "gp2-immediate": ...
+InvalidIdentityToken: No OpenIDConnect provider found in your account for https://oidc.eks.REGION.amazonaws.com/id/...
+```
+
+It likely means the OIDC provider is not associated with the cluster. To address it, follow these steps:
+1. Associate the OIDC Provider  
+```bash
+eksctl utils associate-iam-oidc-provider \
+  --cluster CLUSTER_NAME \
+  --region REGION \
+  --approve
+```
+
+2. Create IAM Role for the CSI Driver
+```bash
+eksctl create iamserviceaccount \
+  --name ebs-csi-controller-sa \
+  --namespace kube-system \
+  --cluster CLUSTER_NAME \
+  --region REGION \
+  --attach-policy-arn arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy \
+  --approve \
+  --role-name AmazonEKS_EBS_CSI_DriverRole
+```
+
+
+
