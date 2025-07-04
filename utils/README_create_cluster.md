@@ -31,7 +31,7 @@ This `create-cluster.sh` script automates the provisioning of an Amazon EKS clus
 
 Update the following variables at the top of the script:
 
-\`\`\`bash
+```bash
 REGION="ap-southeast-2"             # AWS region
 CLUSTER_NAME="myekscluster"         # EKS cluster name
 VPC_CIDR="10.100.0.0/16"            # CIDR block for the VPC
@@ -40,7 +40,7 @@ AWS_ACCOUNT_ID="123456789012"       # Your AWS account ID
 ROLE_NAME="EKSClusterRole"          # IAM role for EKS cluster
 NODE_ROLE_NAME="EKSNodeRole"        # IAM role for worker nodes
 EBS_ROLE_NAME="EBSCSIRole"          # (Optional) Role for EBS CSI driver
-\`\`\`
+```
 
 ---
 
@@ -48,10 +48,10 @@ EBS_ROLE_NAME="EBSCSIRole"          # (Optional) Role for EBS CSI driver
 
 Make the script executable and run it:
 
-\`\`\`bash
+```bash
 chmod +x create-cluster.sh
 ./create-cluster.sh
-\`\`\`
+```
 
 The script will:
 
