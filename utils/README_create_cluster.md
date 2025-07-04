@@ -55,20 +55,12 @@ chmod +x create-cluster.sh
 
 The script will:
 
-1. Create a VPC with public and private subnets
-2. Set up Internet Gateway and NAT Gateway
-3. Configure route tables for public and private subnets
+1. Create a VPC with public and private subnets  
+2. Set up Internet Gateway and NAT Gateway  
+3. Configure route tables for public and private subnets  
 4. Create an EKS cluster with private subnets
 5. Wait for the cluster to become active
 6. Create a managed node group with SSH access
 
 ---
-
-## What to expect
-After running the script, you’ll have:
-
-A fully functional EKS cluster named myekscluster
-A managed node group with 2 nodes deployed in private subnets
-A VPC with public and private subnets across 3 Availability Zones
-Internet and NAT gateways configured for outbound access
 
