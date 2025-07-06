@@ -66,6 +66,7 @@ prompt "MSSQL_SA_PASSWORD" "Enter MSSQL_SA_PASSWORD (Password should be complex 
 
 echo ""
 echo "AWS Credentials"
+prompt "AWS_RegionEndpoint" "Enter AWS_RegionEndpoint (us-east-1, us-east-2..): "
 prompt "AWS_RoleArn" "Enter AWS_RoleArn (if using role-based access, else leave blank): "
 prompt "AWS_IdentityKey" "Enter AWS_IdentityKey (if not using role-based access, else leave blank): "
 prompt "AWS_SecretKey" "Enter AWS_SecretKey (if not using role-based access, else leave blank): " "" true
@@ -83,6 +84,8 @@ prompt "AutoStart" "Enable AutoStart? (True/False, default True): " "True"
 SQLDB_Connection="Server=mssqlinst.mssql.svc.cluster.local;Database=DurableDB;User ID=sa;Password=${MSSQL_SA_PASSWORD};Persist Security Info=False;TrustServerCertificate=True;Encrypt=True;"
 export SQLDB_Connection
 
+# AWS Configuration
+export AWS_RegionEndpoint
 if [[ -n "$AWS_RoleArn" ]]; then
   export AWS_RoleArn
 else
@@ -90,6 +93,7 @@ else
   export AWS_SecretKey
 fi
 
+#OTLP configuration
 export OTLP_ENDPOINT
 export OTLP_HEADER_AUTHORIZATION="Api-Token ${INGEST_TOKEN}"
 export PollingIntervalSeconds
@@ -146,6 +150,7 @@ fi
 cat <<EOF > xray-config.env
 MSSQL_SA_PASSWORD=$MSSQL_SA_PASSWORD
 SQLDB_Connection=$SQLDB_Connection
+AWS_RegionEndpoint=$AWS_RegionEndpoint
 AWS_RoleArn=$AWS_RoleArn
 AWS_IdentityKey=$AWS_IdentityKey
 AWS_SecretKey=$AWS_SecretKey
