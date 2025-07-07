@@ -81,7 +81,7 @@ echo "XRayCollector Job Configuration"
 prompt "PollingIntervalSeconds" "Enter PollingIntervalSeconds (default 300): " "300"
 prompt "AutoStart" "Enable AutoStart? (True/False, default True): " "True"
 
-SQLDB_Connection="Server=mssqlinst.mssql.svc.cluster.local;Database=DurableDB;User ID=sa;Password=${MSSQL_SA_PASSWORD};Persist Security Info=False;TrustServerCertificate=True;Encrypt=True;"
+SQLDB_Connection="Server=mssql.mssql.svc.cluster.local;Database=DurableDB;User ID=sa;Password=${MSSQL_SA_PASSWORD};Persist Security Info=False;TrustServerCertificate=True;Encrypt=True;"
 export SQLDB_Connection
 
 # AWS Configuration
