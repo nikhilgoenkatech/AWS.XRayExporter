@@ -23,5 +23,5 @@ spec:
             - "-d"
             - "60" # Purge history older than 60 minutes
             # Adjust the function key provided according to your keys defined in xrayconnector.yml 
-            - "http://xrayconnector/api/PurgeHistory?code=OmtAbiMXegzpgIOjpSZp4-PvQ17AL875my1-STwphgMXAzFuGc834g=="
+            - "http://xrayconnector.default.svc.cluster.local/api/PurgeHistory?code=UEktkwvwbjWkjeUsD674WE7yh/Fhr2NL9T1PhbS0cuQ="
           restartPolicy: OnFailure
