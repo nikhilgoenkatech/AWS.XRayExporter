@@ -33,6 +33,13 @@ spec:
                 secretKeyRef:
                   name: mssql-secrets
                   key: MSSQL_SA_PASSWORD
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1"
+            limits:
+              memory: "2Gi"
+              cpu: "1"
           volumeMounts:
             - name: mssql
               mountPath: "/var/opt/mssql"
@@ -45,4 +52,4 @@ spec:
         storageClassName: gp2-immediate
         resources:
           requests:
-            storage: 8Gi
+            storage: 4Gi
