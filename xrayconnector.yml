@@ -7,7 +7,7 @@
   host.systemKey.default: VUVrdGt3dndialdramVVc0Q2NzRXRTd5aC9GaHIyTkw5VDFQaGJTMGN1UT0=
   functions.terminateinstance.default: VUVrdGt3dndialdramVVc0Q2NzRXRTd5aC9GaHIyTkw5VDFQaGJTMGN1UT0=
   functions.triggerperiodicapipoller.default: VUVrdGt3dndialdramVVc0Q2NzRXRTd5aC9GaHIyTkw5VDFQaGJTMGN1UT0=
-  functions.workflowwatchdog.default: VUVrdGt3dndialdramVVc0Q2NzRXRTd5aC9GaHIyTkw5VDFQaGJTMGN1UT0=
+  functions.workflowwatchdog.default: VUVrdGt3dndialdramVVc0Q2NzRXRTd5aC9GaHIyTkw5VDFQaGJTMGN1UT0= #MAKE SURE you modify the key at the end of manifest should you CHANGE this!
 apiVersion: v1
 kind: Secret
 metadata:
@@ -171,5 +171,6 @@ spec:
             - /bin/sh
             - -c
             - |
-              curl -X POST "http://xrayconnector/api/WorkflowWatchdog?code=VUVrdGt3dndialdramVVc0Q2NzRXRTd5aC9GaHIyTkw5VDFQaGJTMGN1UT0="
+              curl -X POST "http://xrayconnector/api/WorkflowWatchdog?code=UEktkwvwbjWkjeUsD674WE7yh/Fhr2NL9T1PhbS0cuQ="
           restartPolicy: OnFailure
+
