@@ -16,6 +16,23 @@ This script automates the deployment of X-RAY collector as mentioned [here](http
 
 ---
 
+## 🧭 Namespace-Based Deployment Strategy
+
+To support multi-region trace collection, the script now allows users to specify a **unique Kubernetes namespace** for each deployment of the XRayConnector. This enables isolated deployments that can independently pull trace data from different AWS regions.
+
+### 🔍 How It Works
+
+- Each namespace acts as a logical boundary for a connector instance.
+- The connector deployed in a given namespace will be configured to pull data from the AWS region specified during setup.
+- This design allows multiple connectors to coexist in the same cluster, each targeting a different region.
+
+### 🧩 Benefits
+
+- **Isolation**: Configuration, secrets, and workloads are scoped to the namespace, reducing cross-region interference.
+- **Scalability**: Easily scale trace collection by adding more namespaces for additional regions.
+- **Flexibility**: Customize polling intervals, OTLP endpoints, and AWS credentials per region.
+
+
 ## 🛠️ Prerequisites
 
 Ensure the following tools are installed and configured on your system before running the setup script:
@@ -117,6 +134,7 @@ KEDA (Kubernetes Event-Driven Autoscaling) will be installed or upgraded automat
 ### Step 3: Input Configuration
 
 The script prompts you for:
+- `namespace`
 - `MSSQL_SA_PASSWORD`
 - `AWS_RoleArn` or access keys
 - `OTLP_ENDPOINT` and token
@@ -128,6 +146,7 @@ The script prompts you for:
 ### Step 4: Deploy Resources
 
 The script:
+- Creates the namespace
 - Applies storage class
 - Creates MSSQL StatefulSet and headless service
 - Initializes database
@@ -164,6 +183,7 @@ A file named `xray-config.env` will be created with all the key environment vari
 
 | Variable | Description |
 |----------|-------------|
+| `namespace` | namespace to `isolate deployments` that can independently pull trace data from different AWS regions within same cluster. |
 | `MSSQL_SA_PASSWORD` | Password for the MSSQL `sa` user |
 | `SQLDB_Connection` | Connection string for the MSSQL database |
 | `AWS_RoleArn` | IAM Role ARN for role-based access (optional) |
