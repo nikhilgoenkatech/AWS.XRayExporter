@@ -1,4 +1,0 @@
-$(NugetPackageRoot)google.protobuf.tools\3.17.2\tools\windows_x86\protoc.exe -I=$(ProjectDir)proto --csharp_out=$(ProjectDir)Messages $(ProjectDir)proto\opentelemetry\proto\collector\trace\v1\trace_service.proto
-$(NugetPackageRoot)google.protobuf.tools\3.17.2\tools\windows_x86\protoc.exe -I=$(ProjectDir)proto --csharp_out=$(ProjectDir)Messages $(ProjectDir)proto\opentelemetry\proto\common\v1\common.proto
-$(NugetPackageRoot)google.protobuf.tools\3.17.2\tools\windows_x86\protoc.exe -I=$(ProjectDir)proto --csharp_out=$(ProjectDir)Messages $(ProjectDir)proto\opentelemetry\proto\resource\v1\resource.proto
-$(NugetPackageRoot)google.protobuf.tools\3.17.2\tools\windows_x86\protoc.exe -I=$(ProjectDir)proto --csharp_out=$(ProjectDir)Messages $(ProjectDir)proto\opentelemetry\proto\trace\v1\trace.proto
