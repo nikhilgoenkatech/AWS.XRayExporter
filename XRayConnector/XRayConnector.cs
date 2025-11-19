@@ -38,10 +38,6 @@ namespace XRayConnector
         private const string PollingIntervalMinutes = "PollingIntervalMinutes";
         private const string AutoStart = "AutoStart";
 
-        Console.WriteLine("Initializing X-Ray exporter with configuration: PeriodicAPIPollerSingletoninstanceId={0}, AWSIdentityKey={1}, AWSSecretKey={2}, AWSRoleArn={3}, AWSRoleSessionDurationSeconds={4}, PollingIntervalSeconds={5}, 
-            PollingIntervalMinutes={6}, AutoStart={7}", PeriodicAPIPollerSingletoninstanceId, AWSIdentityKey, AWSSecretKey, AWSRoleArn, AWSRoleSessionDurationSeconds, PollingIntervalSeconds, PollingIntervalMinutes, AutoStart);
-
-
 #region Simulator 
 
         enum TestSimulator
@@ -81,7 +77,6 @@ namespace XRayConnector
                     {
                         _xrayClient = new XRayClient(InitializeXRayClient().GetAwaiter().GetResult());
                     }
-                    
                 }
                 else
                 {
@@ -123,11 +118,9 @@ namespace XRayConnector
 
             if (!string.IsNullOrEmpty(roleArn) && !string.IsNullOrEmpty(regionEndpoint))
             {
-                Console.WriteLine("Role ARN and Region Endpoint are provided. Attempting to assume role with ARN: {0} and Region: {1}", roleArn, regionEndpoint);
                 try
                 {
                     var sessionCredentials = await GetAWSCredentials();
-                    Console.WriteLine("Successfully retrieved session credentials for Role ARN: {0}", roleArn);
 
                     return new AmazonXRayClient(
                         sessionCredentials, 
@@ -135,22 +128,17 @@ namespace XRayConnector
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("Error initializing X-Ray client with assume role. Exception: {0}", ex.Message);
                     throw new InvalidOperationException("An unexpected error occurred while initializing the X-Ray client with assume role.", ex);
                 }
             }
             else
             {
-               Console.WriteLine("Role ARN or Region Endpoint is missing. Falling back to environment variables for credentials.");
-
                 var identityKey = Environment.GetEnvironmentVariable(AWSIdentityKey);
                 var secretKey = Environment.GetEnvironmentVariable(AWSSecretKey);
                 if (!String.IsNullOrEmpty(identityKey) && !String.IsNullOrEmpty(secretKey))
                 {
                     if (!String.IsNullOrEmpty(regionEndpoint))
                     {
-                        Console.WriteLine("Region Endpoint is provided: {0}. Creating AmazonXRayClient with region.", regionEndpoint);
-
                         return new AmazonXRayClient(
                             identityKey,
                             secretKey,
@@ -158,8 +146,6 @@ namespace XRayConnector
                     }
                     else
                     {
-                       Console.WriteLine("Region Endpoint is not provided. Creating AmazonXRayClient without region.");
-
                         return new AmazonXRayClient(
                             identityKey,
                             secretKey);
@@ -245,15 +231,10 @@ namespace XRayConnector
                 {
                     var resp = await XRayClient.GetTraceSummariesAsync(req);
 
-                    log.LogInformation("AWS X-Ray API responded with HTTP status code: {StatusCode}", resp.HttpStatusCode);
                     log.LogInformation($"Traces retrieved: {resp.TraceSummaries.Count}");
-                    log.LogInformation("Traces retrieved: {TraceCount}, ApproximateTimeRangeCount: {ApproximateTimeRangeCount}, NextToken: {NextToken}", resp.TraceSummaries.Count, resp.ApproximateTimeRangeCount, resp.NextToken);
-
                     if (resp.TraceSummaries.Count > 0)
                     {
                         var traceIds = new List<string>(resp.TraceSummaries.Count);
-                        log.LogDebug("Trace IDs retrieved: {TraceIds}", string.Join(", ", traceIds));
-
                         foreach (var s in resp.TraceSummaries)
                             traceIds.Add(s.Id);
 
@@ -266,24 +247,21 @@ namespace XRayConnector
                 } 
                 catch (ThrottledException ex)
                 {
-                    log.LogWarning("Request throttled: {Message}. StartTime={StartTime}, EndTime={EndTime}, NextToken={NextToken}",ex.Message, req.StartTime, req.EndTime, req.NextToken);
                     log.LogWarning($"Request throttled: {ex.Message}");
                 }
                 catch (AmazonServiceException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 {
                     log.LogWarning($"Too many requests (429): {ex.Message}");
-
                 }
                 catch (Exception ex)
                 {
-                    log.LogError(ex, "GetTraces failed. StartTime={StartTime}, EndTime={EndTime}, NextToken={NextToken}",req.StartTime, req.EndTime, req.NextToken);
+                    log.LogError(ex, "GetTraces failed");
                 }
 
             }
             else
             {
-                log.LogWarning("XRayClient is not initialized. Skipping X-Ray API polling. Ensure the client is properly configured.");
-
+                log.LogWarning("Skip XRay API polling - client not initialized");
             }
 
             return null;
@@ -371,7 +349,6 @@ namespace XRayConnector
         {
             try
             {
-                log.LogDebug("Traces JSON below");
                 log.LogDebug(tracesJson);
 
                 if (SimulatorMode == TestSimulator.Off)
@@ -397,8 +374,6 @@ namespace XRayConnector
                     var content = new XRay2OTLP.ExportRequestContent(exportTraceServiceRequest);
 
                     var res = await httpClient.PostAsync(otlpEndpoint, content);
-                    log.LogDebug("HTTP POST to {OtlpEndpoint} completed with status code: {StatusCode} and reason: {ReasonPhrase}", otlpEndpoint, res.StatusCode, res.ReasonPhrase);
-
                     if (!res.IsSuccessStatusCode)
                     {
                         throw new Exception("Couldn't send span. Status: " + (res.StatusCode));
@@ -424,15 +399,10 @@ namespace XRayConnector
         [OrchestrationTrigger] IDurableOrchestrationContext context, ILogger log)
         {
             var traces = context.GetInput<TracesResult>();
-            log.LogDebug("RetrieveTraceDetails: Starting to process traces. Total traces received: {TraceCount}", traces.Count);
-
-
             if (traces != null)
             {
                 foreach (var traceBatch in traces.TraceIds)
                 {
-                     log.LogDebug("Processing trace: {Trace}", JsonConvert.SerializeObject(trace));
-
                     var getTraceDetails = new TraceDetailsRequest()
                     {
                         TraceIds = traceBatch
@@ -465,12 +435,8 @@ namespace XRayConnector
             [OrchestrationTrigger] IDurableOrchestrationContext context, ILogger log)
         {
 
-            log.LogInformation("RetrieveRecentTraces: Function triggered at {CurrentTime}", context.CurrentUtcDateTime);
-
             var currentTime = context.CurrentUtcDateTime; //https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-code-constraints?tabs=csharp#dates-and-times
             var pollingInterval = -1 * context.GetInput<uint>();
-            log.LogDebug("RetrieveRecentTraces: Polling interval is {PollingInterval} seconds. Current time is {CurrentTime}", pollingInterval, currentTime);
-
 
             var getTraces = new TracesRequest()
             {
@@ -480,11 +446,6 @@ namespace XRayConnector
 
             
             var traces = await context.CallActivityAsync<TracesResult>(nameof(GetRecentTraceIds), getTraces);
-
-            // Log the count of traces or summaries retrieved
-            log.LogDebug("Traces retrieved: {TraceCount}", traces?.TraceIds?.Count() ?? 0);
-            log.LogDebug("Trace summaries retrieved: {SummaryCount}", traces?.TraceSummaries?.Count ?? 0);
-
             if (traces != null)
             {
                 await context.CallSubOrchestratorAsync(nameof(RetrieveTraceDetails), traces);
@@ -635,7 +596,7 @@ namespace XRayConnector
             context.ContinueAsNew(null);
         }
 
-        //Due to a issue to get admin urls from CreateAndCheckResponse, add a dedicated function to terminate rchestration.
+        //Due to a issue to get admin urls from CreateAndCheckResponse, add a dedicated function to terminate orchestration.
         [FunctionName(nameof(TerminatePeriodicAPIPoller))]
         public async Task<HttpResponseMessage> TerminatePeriodicAPIPoller(
         [HttpTrigger(AuthorizationLevel.Admin, "POST")] HttpRequestMessage req,
