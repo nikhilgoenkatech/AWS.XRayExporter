@@ -63,7 +63,10 @@ echo $MSSQL_SA_PASSWORD
 echo ""
 echo "AWS Credentials"
 prompt "AWS_RegionEndpoint" "Enter AWS_RegionEndpoint (us-west-2, us-east-2..): "
-NAMESPACE=$AWS_RegionEndpoint
+
+echo ""
+echo "Namespace Configuration"
+prompt "NAMESPACE" "Enter the Kubernetes namespace to use: "
 export NAMESPACE
 echo "Using namespace: $NAMESPACE"
 
